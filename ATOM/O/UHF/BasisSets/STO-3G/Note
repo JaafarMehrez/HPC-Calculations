@@ -1,0 +1,8 @@
+Error:
+--------------------------------------------------------
+for a0, a1 in lib.prange(0, nvirb, int(bufsize/nvira+1)):
+                                           ~~~~~~~^~~~~~
+ZeroDivisionError: division by zero
+--------------------------------------------------------
+
+The size of STO-3G basis set is not big enough to do CC

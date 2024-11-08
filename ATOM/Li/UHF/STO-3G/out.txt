@@ -1,0 +1,687 @@
+#INFO: **** input file is /Users/jmhrzz/HPQC/ForkedRepo/PySCF-PySCF/ATOM/Li/UHF/STO-3G/inp.py ****
+import os, sys, glob, subprocess, textwrap, numpy
+import pyscf
+from functools import reduce
+from pyscf import cc, lib, tools, scf, symm, ao2mo
+from pyscf.tools.fcidump import from_mo
+from pyscf.tools.fcidump import from_integrals
+from pyscf.gto.basis import parse_gaussian
+import pyscf.symm.param as param
+import pyscf.lib.logger as logger
+from subprocess import call
+from io import StringIO
+name = 'out'
+mol = pyscf.M(
+    atom = '''
+        LI
+    ''',
+    unit = 'angstrom',
+    basis = {
+            'LI' : parse_gaussian.load('Li-STO-3G.gbs', 'LI')
+    },
+    charge = 0,
+    spin = 1,
+    symmetry = True,
+    verbose = 9,
+    symmetry_subgroup = 'D2h',
+    output = name +'.txt',
+    max_memory = 4000,
+)
+mf = mol.UHF().set(conv_tol=1e-10,max_cycle=999,ddm_tol=1e-14,direct_scf_tol=1e-13,chkfile=name+'.chk',init_guess='atom',irrep_nelec={'Ag':3})
+mf.kernel()
+
+mycc = cc.UCCSD(mf).set(conv_tol=1e-10).run()
+et = mycc.ccsd_t()
+print('CCSD total energy', mycc.e_tot)
+print('CCSD(T) total energy', mycc.e_tot + et)
+
+orbs = mf.mo_coeff
+nmo = orbs[0].shape[0]
+eri_aaaa = pyscf.ao2mo.restore(4,pyscf.ao2mo.incore.general(mf._eri, (orbs[0],orbs[0],orbs[0],orbs[0]), compact=False),nmo)
+eri_bbbb = pyscf.ao2mo.restore(4,pyscf.ao2mo.incore.general(mf._eri, (orbs[1],orbs[1],orbs[1],orbs[1]), compact=False),nmo)
+eri_aabb = pyscf.ao2mo.restore(4,pyscf.ao2mo.incore.general(mf._eri, (orbs[0],orbs[0],orbs[1],orbs[1]), compact=False),nmo)
+h_core = mf.get_hcore(mol)
+h_aa = reduce(numpy.dot, (orbs[0].T, h_core, orbs[0]))
+h_bb = reduce(numpy.dot, (orbs[1].T, h_core, orbs[1]))
+nuc = mol.energy_nuc()
+float_format = '% 0.20E'
+if mol.symmetry:
+        groupname = mol.groupname
+        if groupname in ('SO3', 'Dooh'):
+            logger.info(mol, 'Lower symmetry from %s to D2h', groupname)
+            raise RuntimeError('Lower symmetry from %s to D2h' % groupname)
+        elif groupname == 'Coov':
+            logger.info(mol, 'Lower symmetry from Coov to C2v')
+            raise RuntimeError('''Lower symmetry from Coov to C2v''')
+orbsym = pyscf.symm.label_orb_symm(mol,mol.irrep_name,mol.symm_orb,orbs[0])
+orbsym = numpy.array(orbsym)
+orbsym = [param.IRREP_ID_TABLE[groupname][i]+1 for i in orbsym]
+a_inds = [i+1 for i in range(orbs[0].shape[0])]
+b_inds = [i+1 for i in range(orbs[1].shape[1])]
+nelec = mol.nelec
+tol=1e-18
+with open('fort.55', 'w') as fout:
+        if not isinstance(nelec, (int, numpy.number)):
+            ms    = abs(nelec[0] - nelec[1])
+            nelec =     nelec[0]  + nelec[1]
+        else: ms=0
+        fout.write(f"{nmo:1d} {nelec:1d}\n")
+        if orbsym is not None and len(orbsym) > 0:
+            fout.write(f"{' '.join([str(x) for x in orbsym])}\n")
+        else:
+            fout.write(f"{' 1' * nmo}\n")
+        fout.write(' 150000\n')
+        output_format = float_format + ' %5d %5d %5d %5d\n'
+        #4-fold symmetry
+        kl = 0
+        for l in range(nmo):
+            for k in range(0, l+1):
+                ij = 0
+                for i in range(0, nmo):
+                    for j in range(0, i+1):
+                        if i >= k:
+                            if abs(eri_aaaa[ij,kl]) > tol:
+                                fout.write(output_format % (eri_aaaa[ij,kl], a_inds[i], a_inds[j], a_inds[k], a_inds[l]))
+                        ij += 1
+                kl += 1
+        fout.write(' 0.00000000000000000000E+00' + '     0     0     0     0\n')
+        kl = 0
+        for l in range(nmo):
+            for k in range(0, l+1):
+                ij = 0
+                for i in range(0, nmo):
+                    for j in range(0, i+1):
+                        if i >= k:
+                            if abs(eri_bbbb[ij,kl]) > tol:
+                                fout.write(output_format % (eri_bbbb[ij,kl], b_inds[i], b_inds[j], b_inds[k], b_inds[l]))
+                        ij += 1
+                kl += 1
+        fout.write(' 0.00000000000000000000E+00' + '     0     0     0     0\n')
+        ij = 0
+        for j in range(nmo):
+            for i in range(0, j+1):
+                kl = 0
+                for k in range(nmo):
+                    for l in range(0, k+1):
+                        if abs(eri_aabb[ij,kl]) > tol:
+                            fout.write(output_format % (eri_aabb[ij,kl], a_inds[i], a_inds[j], b_inds[k], b_inds[l]))
+                        kl += 1
+                ij +=1
+
+        fout.write(' 0.00000000000000000000E+00' + '     0     0     0     0\n')
+        h_aa = h_aa.reshape(nmo,nmo)
+        h_bb = h_bb.reshape(nmo,nmo)
+        output_format = float_format + ' %5d %5d     0     0\n'
+        for i in range(nmo):
+            for j in range(nmo):
+                fout.write(output_format % (h_aa[i,j], a_inds[i], a_inds[j]))
+        fout.write(' 0.00000000000000000000E+00' + '     0     0     0     0\n')
+        for i in range(nmo):
+            for j in range(nmo):
+                fout.write(output_format % (h_bb[i,j], b_inds[i], b_inds[j]))
+        fout.write(' 0.00000000000000000000E+00' + '     0     0     0     0\n')
+        output_format = float_format + '     0     0     0     0\n'
+        fout.write(output_format % nuc)
+#INFO: ******************** input file end ********************
+
+
+System: uname_result(system='Darwin', node='Redmi-K70-Pro', release='24.1.0', version='Darwin Kernel Version 24.1.0: Thu Oct 10 21:02:45 PDT 2024; root:xnu-11215.41.3~2/RELEASE_ARM64_T8112', machine='arm64')  Threads 1
+Python 3.11.10 (main, Sep  7 2024, 01:03:31) [Clang 16.0.0 (clang-1600.0.26.3)]
+numpy 2.1.1  scipy 1.14.1  h5py 3.11.0
+Date: Fri Nov  8 08:37:06 2024
+PySCF version 2.6.2
+PySCF path  /Users/jmhrzz/HPQC/PySCF/pyscf-test/lib/python3.11/site-packages/pyscf
+
+[CONFIG] ARGPARSE = False
+[CONFIG] DEBUG = False
+[CONFIG] MAX_MEMORY = 4000
+[CONFIG] TMPDIR = /var/folders/sv/p893skhd53z1sh_0fgwlc_0w0000gn/T
+[CONFIG] UNIT = angstrom
+[CONFIG] VERBOSE = 3
+[CONFIG] conf_file = None
+[INPUT] verbose = 9
+[INPUT] max_memory = 4000 
+[INPUT] num. atoms = 1
+[INPUT] num. electrons = 3
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 1
+[INPUT] symmetry True subgroup D2h
+[INPUT] Mole.unit = angstrom
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 Li     0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT] ---------------- BASIS SET ---------------- 
+[INPUT] l, kappa, [nprim/nctr], expnt,             c_1 c_2 ...
+[INPUT] Li
+[INPUT] 0    0    [3    /1   ]  16.119575         0.1543289
+                                2.9362007         0.5353281
+                                0.7946505         0.4446345
+[INPUT] 0    0    [3    /1   ]  0.6362897         -0.0999672
+                                0.1478601         0.3995128
+                                0.0480887         0.7001154
+[INPUT] 1    0    [3    /1   ]  0.6362897         0.1559162
+                                0.1478601         0.6076837
+                                0.0480887         0.3919573
+
+nuclear repulsion = 0
+point group symmetry = SO3, use subgroup D2h
+symmetry origin: [0. 0. 0.]
+symmetry axis x: [1. 0. 0.]
+symmetry axis y: [0. 1. 0.]
+symmetry axis z: [0. 0. 1.]
+num. orbitals of irrep Ag = 2
+num. orbitals of irrep B1u = 1
+num. orbitals of irrep B2u = 1
+num. orbitals of irrep B3u = 1
+number of shells = 3
+number of NR pGTOs = 15
+number of NR cGTOs = 5
+basis = {'LI': [[0, [16.119575, 0.1543289], [2.9362007, 0.5353281], [0.7946505, 0.4446345]], [0, [0.6362897, -0.0999672], [0.1478601, 0.3995128], [0.0480887, 0.7001154]], [1, [0.6362897, 0.1559162], [0.1478601, 0.6076837], [0.0480887, 0.3919573]]]}
+ecp = {}
+bas 0, expnt(s) = [16.119575   2.9362007  0.7946505]
+bas 1, expnt(s) = [0.6362897 0.1478601 0.0480887]
+bas 2, expnt(s) = [0.6362897 0.1478601 0.0480887]
+CPU time:         0.25
+arg.atm = [[ 3 20  1 23  0  0]]
+arg.bas = [[ 0  0  3  1  0 24 27  0]
+ [ 0  0  3  1  0 30 33  0]
+ [ 0  1  3  1  0 36 39  0]]
+arg.env = [ 0.          0.          0.          0.          0.          0.
+  0.          0.          0.          0.          0.          0.
+  0.          0.          0.          0.          0.          0.
+  0.          0.          0.          0.          0.          0.
+ 16.119575    2.9362007   0.7946505   3.13673281  3.03371249  0.94547566
+  0.6362897   0.1478601   0.0480887  -0.17993422  0.24067668  0.18164229
+  0.6362897   0.1478601   0.0480887   0.25849033  0.16254581  0.02574999]
+ecpbas  = []
+
+
+******** <class 'pyscf.scf.uhf_symm.SymAdaptedUHF'> ********
+method = SymAdaptedUHF
+initial guess = atom
+damping factor = 0
+level_shift factor = 0
+DIIS = <class 'pyscf.scf.diis.CDIIS'>
+diis_start_cycle = 1
+diis_space = 8
+diis_damp = 0
+SCF conv_tol = 1e-10
+SCF conv_tol_grad = None
+SCF ddm_tol = 1e-14
+SCF max_cycles = 999
+direct_scf = True
+direct_scf_tol = 1e-13
+chkfile to save SCF result = out.chk
+max_memory 4000 MB (current use 0 MB)
+number electrons alpha = 2  beta = 1
+irrep_nelec {'Ag': 3}
+Freeze 3 electrons in irreps ['Ag']
+    0 free electrons in irreps B1u B2u B3u
+cond(S) = 1.6355206927384696
+Set gradient conv threshold to 1e-05
+Spherically averaged atomic HF for {'Li'}
+
+
+******** <class 'pyscf.scf.atom_hf.AtomSphAverageRHF'> ********
+method = AtomSphAverageRHF
+initial guess = minao
+damping factor = 0
+level_shift factor = 0
+DIIS = <class 'pyscf.scf.diis.CDIIS'>
+diis_start_cycle = 1
+diis_space = 8
+diis_damp = 0
+SCF conv_tol = 1e-09
+SCF conv_tol_grad = None
+SCF ddm_tol = 1e-10
+SCF max_cycles = 50
+direct_scf = True
+direct_scf_tol = 1e-13
+chkfile to save SCF result = /var/folders/sv/p893skhd53z1sh_0fgwlc_0w0000gn/T/tmpg5nuhej8
+max_memory 4000 MB (current use 0 MB)
+atom = Li
+Set gradient conv threshold to 3.16228e-05
+Initial guess from minao.
+Nelec from initial guess = 2.950729162675035
+E1 = -9.695278687637238  E_coul = 2.4577829163045073
+init E= -7.23749577133273
+l = 0  e_0 = -2.37050358
+l = 0  e_1 = -0.0463019152
+l = 1  e_0 = 0.148059114
+    CPU time for initialize scf      0.01 sec, wall time      0.02 sec
+l = 0  e_0 = -2.37050358
+l = 0  e_1 = -0.0463019152
+l = 1  e_0 = 0.148059114
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.745218630589367  E_coul = 2.500289364184301
+cycle= 1 E= -7.24492926640507  delta_E= -0.00743  |g|=    0  |ddm|= 0.0518
+    CPU time for cycle= 1      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0.00341562
+diis-c [-1.16664478e-05  1.00000000e+00]
+l = 0  e_0 = -2.35286476
+l = 0  e_1 = -0.0389129059
+l = 1  e_0 = 0.160613129
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.744833297201891  E_coul = 2.4999013417029357
+cycle= 2 E= -7.24493195549896  delta_E= -2.69e-06  |g|=    0  |ddm|= 0.00163
+    CPU time for cycle= 2      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0.000227764
+diis-c [-5.53342488e-22 -7.14475011e-02  1.07144750e+00]
+l = 0  e_0 = -2.35306738
+l = 0  e_1 = -0.0389236071
+l = 1  e_0 = 0.160584122
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.744805480770282  E_coul = 2.4998735132624925
+cycle= 3 E= -7.24493196750779  delta_E= -1.2e-08  |g|=    0  |ddm|= 0.000117
+    CPU time for cycle= 3      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.14816e-08
+Linear dependence found in DIIS error vectors.
+diis-c [ 4.00189398e-16 -3.31815614e-02  4.97627340e-01  5.35554221e-01]
+l = 0  e_0 = -2.3530674
+l = 0  e_1 = -0.0389236179
+l = 1  e_0 = 0.160584116
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.744805481521768  E_coul = 2.499873514013977
+cycle= 4 E= -7.24493196750779  delta_E= -1.78e-15  |g|=    0  |ddm|= 3.15e-09
+    CPU time for cycle= 4      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=5.33225e-09
+Linear dependence found in DIIS error vectors.
+diis-c [ 3.62081280e-16 -2.16083102e-02  3.24070249e-01  3.48769364e-01
+  3.48768697e-01]
+l = 0  e_0 = -2.3530674
+l = 0  e_1 = -0.0389236212
+l = 1  e_0 = 0.160584114
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.744805481749049  E_coul = 2.4998735142412567
+cycle= 5 E= -7.24493196750779  delta_E= -1.78e-15  |g|=    0  |ddm|= 9.54e-10
+    CPU time for cycle= 5      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=3.47243e-09
+Linear dependence found in DIIS error vectors.
+diis-c [ 3.03669041e-16 -1.60205041e-02  2.40271169e-01  2.58583491e-01
+  2.58582997e-01  2.58582847e-01]
+l = 0  e_0 = -2.3530674
+l = 0  e_1 = -0.0389236228
+l = 1  e_0 = 0.160584113
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.74480548185878  E_coul = 2.49987351435099
+cycle= 6 E= -7.24493196750779  delta_E= 1.78e-15  |g|=    0  |ddm|= 4.6e-10
+    CPU time for cycle= 6      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.57448e-09
+Linear dependence found in DIIS error vectors.
+diis-c [ 1.63139075e-16 -1.27288468e-02  1.90906110e-01  2.05456052e-01
+  2.05455660e-01  2.05455541e-01  2.05455484e-01]
+l = 0  e_0 = -2.35306741
+l = 0  e_1 = -0.0389236237
+l = 1  e_0 = 0.160584113
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.744805481923427  E_coul = 2.499873514415634
+cycle= 7 E= -7.24493196750779  delta_E= -1.78e-15  |g|=    0  |ddm|= 2.71e-10
+    CPU time for cycle= 7      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.04551e-09
+Linear dependence found in DIIS error vectors.
+diis-c [ 2.59091973e-16 -1.05592645e-02  1.58368439e-01  1.70438510e-01
+  1.70438184e-01  1.70438085e-01  1.70438038e-01  1.70438010e-01]
+l = 0  e_0 = -2.35306741
+l = 0  e_1 = -0.0389236243
+l = 1  e_0 = 0.160584112
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.744805481966033  E_coul = 2.4998735144582414
+cycle= 8 E= -7.24493196750779  delta_E= 8.88e-16  |g|=    0  |ddm|= 1.79e-10
+    CPU time for cycle= 8      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.69686e-09
+Linear dependence found in DIIS error vectors.
+diis-c [ 1.38989186e-16 -9.02156245e-03  1.35306982e-01  1.45619416e-01
+  1.45619137e-01  1.45619053e-01  1.45619013e-01  1.45618989e-01
+  1.45618973e-01]
+l = 0  e_0 = -2.35306741
+l = 0  e_1 = -0.0389236247
+l = 1  e_0 = 0.160584112
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.74480548199623  E_coul = 2.4998735144884394
+cycle= 9 E= -7.24493196750779  delta_E=    0  |g|=    0  |ddm|= 1.27e-10
+    CPU time for cycle= 9      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.44975e-09
+Linear dependence found in DIIS error vectors.
+diis-c [3.24581508e-16 1.42853025e-01 1.75961052e-05 1.42859316e-01
+ 1.42855460e-01 1.42854294e-01 1.42853730e-01 1.42853399e-01
+ 1.42853180e-01]
+l = 0  e_0 = -2.35306741
+l = 0  e_1 = -0.0389236273
+l = 1  e_0 = 0.160584111
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.7448054821734  E_coul = 2.4998735146656084
+cycle= 10 E= -7.24493196750779  delta_E= 8.88e-16  |g|=    0  |ddm|= 7.43e-10
+    CPU time for cycle= 10      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.89976e-14
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+l = 0  e_0 = -2.35306741
+l = 0  e_1 = -0.0389236273
+l = 1  e_0 = 0.160584111
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.744805482144844  E_coul = 2.4998735146370525
+cycle= 11 E= -7.24493196750779  delta_E= -1.78e-15  |g|=    0  |ddm|= 1.2e-10
+    CPU time for cycle= 11      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.33638e-10
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+l = 0  e_0 = -2.35306741
+l = 0  e_1 = -0.0389236273
+l = 1  e_0 = 0.160584111
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.744805482156295  E_coul = 2.4998735146485016
+cycle= 12 E= -7.24493196750779  delta_E= -8.88e-16  |g|=    0  |ddm|= 4.8e-11
+    CPU time for cycle= 12      0.00 sec, wall time      0.00 sec
+l = 0  e_0 = -2.35306741
+l = 0  e_1 = -0.0389236273
+l = 1  e_0 = 0.160584111
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.744805482172255  E_coul = 2.499873514664465
+Extra cycle  E= -7.24493196750779  delta_E= 2.66e-15  |g|=    0  |ddm|= 4.8e-11
+    CPU time for scf_cycle      0.02 sec, wall time      0.02 sec
+    CPU time for SCF      0.02 sec, wall time      0.02 sec
+Atomic HF for atom  Li  converged. SCF energy = -7.24493196750779
+
+Atom Li, E = -7.24493196751
+Nelec from initial guess = (np.float64(1.5), np.float64(1.5))
+E1 = -9.744805482172255  Ecoul = 2.499873514664465
+init E= -7.24493196750779
+    CPU time for initialize scf      0.02 sec, wall time      0.03 sec
+alpha HOMO (Ag) = -0.0389236272900646  LUMO (B1u) = 0.16058411083736
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.0389236272900646
+   mo_energy = [-2.35306741 -0.03892363]
+alpha-B1u nocc = 0
+   mo_energy = [0.16058411]
+alpha-B2u nocc = 0
+   mo_energy = [0.16058411]
+alpha-B3u nocc = 0
+   mo_energy = [0.16058411]
+beta-Ag nocc = 1  HOMO = -2.35306741277663  LUMO = -0.0389236272900646
+
+WARN: beta-Ag LUMO -0.0389236272900646 < system HOMO -0.0389236272900646
+
+   mo_energy = [-2.35306741 -0.03892363]
+beta-B1u nocc = 0
+   mo_energy = [0.16058411]
+beta-B2u nocc = 0
+   mo_energy = [0.16058411]
+beta-B3u nocc = 0
+   mo_energy = [0.16058411]
+multiplicity <S^2> = 0.75  2S+1 = 2
+E1 = -9.744805482173321  Ecoul = 2.4292912223113956
+cycle= 1 E= -7.31551425986193  delta_E= -0.0706  |g|= 0.00492  |ddm|= 1.06
+    CPU time for cycle= 1      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0.00696334
+diis-c [-4.84880618e-05  1.00000000e+00]
+alpha HOMO (Ag) = -0.180077132615115  LUMO (B1u) = 0.130156678319087
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.180077132615115
+   mo_energy = [-2.36829946 -0.18007713]
+alpha-B1u nocc = 0
+   mo_energy = [0.13015668]
+alpha-B2u nocc = 0
+   mo_energy = [0.13015668]
+alpha-B3u nocc = 0
+   mo_energy = [0.13015668]
+beta-Ag nocc = 1  HOMO = -2.33785638207977  LUMO = 0.102250893100101
+   mo_energy = [-2.33785638  0.10225089]
+beta-B1u nocc = 0
+   mo_energy = [0.19101154]
+beta-B2u nocc = 0
+   mo_energy = [0.19101154]
+beta-B3u nocc = 0
+   mo_energy = [0.19101154]
+multiplicity <S^2> = 0.75  2S+1 = 2
+E1 = -9.744038182163482  Ecoul = 2.4285124830729465
+cycle= 2 E= -7.31552569909054  delta_E= -1.14e-05  |g|= 0.000745  |ddm|= 0.00316
+    CPU time for cycle= 2      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0.00105375
+diis-c [-1.08289967e-21 -1.78311509e-01  1.17831151e+00]
+alpha HOMO (Ag) = -0.180123864404455  LUMO (B1u) = 0.130126359897526
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.180123864404455
+   mo_energy = [-2.36917032 -0.18012386]
+alpha-B1u nocc = 0
+   mo_energy = [0.13012636]
+alpha-B2u nocc = 0
+   mo_energy = [0.13012636]
+alpha-B3u nocc = 0
+   mo_energy = [0.13012636]
+beta-Ag nocc = 1  HOMO = -2.33785846962936  LUMO = 0.102252980649693
+   mo_energy = [-2.33785847  0.10225298]
+beta-B1u nocc = 0
+   mo_energy = [0.19091644]
+beta-B2u nocc = 0
+   mo_energy = [0.19091644]
+beta-B3u nocc = 0
+   mo_energy = [0.19091644]
+multiplicity <S^2> = 0.75  2S+1 = 2
+E1 = -9.743898414758291  Ecoul = 2.4283724475695827
+cycle= 3 E= -7.31552596718871  delta_E= -2.68e-07  |g|= 1.11e-16  |ddm|= 0.000565
+    CPU time for cycle= 3      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=6.57481e-17
+Linear dependence found in DIIS error vectors.
+diis-c [ 3.14668505e-16 -7.36759570e-02  4.86862729e-01  5.86813228e-01]
+alpha HOMO (Ag) = -0.180123922883521  LUMO (B1u) = 0.130126304343817
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.180123922883521
+   mo_energy = [-2.36917096 -0.18012392]
+alpha-B1u nocc = 0
+   mo_energy = [0.1301263]
+alpha-B2u nocc = 0
+   mo_energy = [0.1301263]
+alpha-B3u nocc = 0
+   mo_energy = [0.1301263]
+beta-Ag nocc = 1  HOMO = -2.33785828425232  LUMO = 0.102252795272649
+   mo_energy = [-2.33785828  0.1022528 ]
+beta-B1u nocc = 0
+   mo_energy = [0.19091636]
+beta-B2u nocc = 0
+   mo_energy = [0.19091636]
+beta-B3u nocc = 0
+   mo_energy = [0.19091636]
+multiplicity <S^2> = 0.75  2S+1 = 2
+E1 = -9.743898414758288  Ecoul = 2.428372447569581
+cycle= 4 E= -7.31552596718871  delta_E= 1.78e-15  |g|= 1.55e-15  |ddm|= 1.77e-15
+    CPU time for cycle= 4      0.00 sec, wall time      0.00 sec
+alpha HOMO (Ag) = -0.180123964059781  LUMO (B1u) = 0.130126265227355
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.180123964059781
+   mo_energy = [-2.3691714  -0.18012396]
+alpha-B1u nocc = 0
+   mo_energy = [0.13012627]
+alpha-B2u nocc = 0
+   mo_energy = [0.13012627]
+alpha-B3u nocc = 0
+   mo_energy = [0.13012627]
+beta-Ag nocc = 1  HOMO = -2.33785815372468  LUMO = 0.102252664745015
+   mo_energy = [-2.33785815  0.10225266]
+beta-B1u nocc = 0
+   mo_energy = [0.1909163]
+beta-B2u nocc = 0
+   mo_energy = [0.1909163]
+beta-B3u nocc = 0
+   mo_energy = [0.1909163]
+multiplicity <S^2> = 0.75  2S+1 = 2
+E1 = -9.743898414758293  Ecoul = 2.428372447569584
+Extra cycle  E= -7.31552596718871  delta_E= -1.78e-15  |g|= 1.11e-16  |ddm|= 1.77e-15
+    CPU time for scf_cycle      0.03 sec, wall time      0.03 sec
+    CPU time for SCF      0.03 sec, wall time      0.04 sec
+converged SCF energy = -7.31552596718871  <S^2> = 0.75  2S+1 = 2
+
+******** <class 'pyscf.cc.uccsd.UCCSD'> ********
+CC2 = 0
+CCSD nocc = (2, 1), nmo = (5, 5)
+max_cycle = 50
+direct = 0
+conv_tol = 1e-10
+conv_tol_normt = 1e-06
+diis_space = 6
+diis_start_cycle = 0
+diis_start_energy_diff = 1e+09
+max_memory 4000 MB (current use 0 MB)
+E1 = -9.743898414758293  Ecoul = 2.428372447569584
+Init t2, MP2 energy = -0.000256409397933078
+    CPU time for init mp2      0.00 sec, wall time      0.00 sec
+Init E_corr(UCCSD) = -0.000256409397933078
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [3:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for update t1 t2      0.00 sec, wall time      0.00 sec
+DIIS for step 0
+cycle = 1  E_corr(UCCSD) = -0.000298514472252451  dE = -4.21050743e-05  norm(t1,t2) = 0.00184083
+    CPU time for UCCSD iter      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [3:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for update t1 t2      0.00 sec, wall time      0.00 sec
+diis-c [-1.51169159e-07  1.00000000e+00]
+DIIS for step 1
+cycle = 2  E_corr(UCCSD) = -0.000308072452174716  dE = -9.55797992e-06  norm(t1,t2) = 0.000388805
+    CPU time for UCCSD iter      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [3:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for update t1 t2      0.00 sec, wall time      0.00 sec
+diis-c [-1.55086090e-10 -2.80344191e-01  1.28034419e+00]
+DIIS for step 2
+cycle = 3  E_corr(UCCSD) = -0.000310569541420225  dE = -2.49708925e-06  norm(t1,t2) = 8.59955e-05
+    CPU time for UCCSD iter      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [3:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for update t1 t2      0.00 sec, wall time      0.00 sec
+diis-c [-2.10176868e-12  3.17185766e-03 -1.60270346e-02  1.01285518e+00]
+DIIS for step 3
+cycle = 4  E_corr(UCCSD) = -0.000310573339387875  dE = -3.79796765e-09  norm(t1,t2) = 1.46396e-06
+    CPU time for UCCSD iter      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [3:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for update t1 t2      0.00 sec, wall time      0.00 sec
+diis-c [-2.17179682e-23  3.57371342e-03 -1.64616087e-02 -2.60769214e-02
+  1.03896482e+00]
+DIIS for step 4
+cycle = 5  E_corr(UCCSD) = -0.000310571512118502  dE = 1.82726937e-09  norm(t1,t2) = 1.67147e-07
+    CPU time for UCCSD iter      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [3:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:1]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [1:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:3]      0.00 sec, wall time      0.00 sec
+    CPU time for update t1 t2      0.00 sec, wall time      0.00 sec
+Linear dependence found in DIIS error vectors.
+diis-c [-1.01047226e-16  1.71779944e-03 -7.91272753e-03 -1.25448769e-02
+  4.99408465e-01  5.19331340e-01]
+DIIS for step 5
+cycle = 6  E_corr(UCCSD) = -0.000310571512193281  dE = -7.47781286e-14  norm(t1,t2) = 6.05942e-12
+    CPU time for UCCSD iter      0.00 sec, wall time      0.00 sec
+    CPU time for UCCSD      0.01 sec, wall time      0.01 sec
+UCCSD converged
+E(UCCSD) = -7.315836538700902  E_corr = -0.0003105715121932806
+    CPU time for transpose 0:3      0.00 sec, wall time      0.00 sec
+    CPU time for transpose 0:4      0.00 sec, wall time      0.00 sec
+    CPU time for transpose 0:3      0.00 sec, wall time      0.00 sec
+    CPU time for transpose 0:4      0.00 sec, wall time      0.00 sec
+    CPU time for UCCSD(T) sort_eri      0.00 sec, wall time      0.00 sec
+max_memory 4000 MB (0 MB in use)
+    CPU time for contract 0:3,0:3      0.00 sec, wall time      0.00 sec
+    CPU time for contract_aaa      0.00 sec, wall time      0.00 sec
+max_memory 4000 MB (0 MB in use)
+    CPU time for contract 0:4,0:4      0.00 sec, wall time      0.00 sec
+    CPU time for contract_bbb      0.00 sec, wall time      0.00 sec
+    CPU time for contract 0:4,0:3      0.00 sec, wall time      0.00 sec
+    CPU time for contract_baa      0.00 sec, wall time      0.00 sec
+    CPU time for contract 0:3,0:4      0.00 sec, wall time      0.00 sec
+    CPU time for contract_abb      0.00 sec, wall time      0.00 sec
+    CPU time for UCCSD(T)      0.00 sec, wall time      0.00 sec
+UCCSD(T) correction = 0
+irreps of each MO ['Ag' 'Ag' 'B1u' 'B2u' 'B3u']

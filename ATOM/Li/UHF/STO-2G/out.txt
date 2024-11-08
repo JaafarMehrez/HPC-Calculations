@@ -1,0 +1,366 @@
+#INFO: **** input file is /Users/jmhrzz/HPQC/PySCF/Mol/LI/UHF/STO-2G/UHF-debug.py ****
+import os, sys, glob, subprocess, textwrap, numpy
+import pyscf
+from functools import reduce
+from pyscf import cc, lib, tools, scf, symm, ao2mo
+from pyscf.tools.fcidump import from_mo
+from pyscf.tools.fcidump import from_integrals
+from pyscf.gto.basis import parse_gaussian
+import pyscf.symm.param as param
+import pyscf.lib.logger as logger
+from subprocess import call
+from io import StringIO
+name = 'out'
+mol = pyscf.M(
+    atom = '''
+        LI
+    ''',
+    unit = 'angstrom',
+    basis = {
+            'LI' : parse_gaussian.load('STO-2G.gbs', 'LI')
+    },
+    charge = 0,
+    spin = 1,
+    verbose = 9,
+    symmetry = True,
+    output = name +'.txt',
+    symmetry_subgroup = 'D2h',
+    max_memory = 4000,
+)
+mol.max_memory =4000
+mf = mol.UHF().set(conv_tol=1e-10,max_cycle=999,direct_scf_tol=1e-15,chkfile=name+'.chk',init_guess='atom',irrep_nelec={'Ag': 3})
+
+
+mf.kernel()
+orbs = mf.mo_coeff
+nmo = orbs[0].shape[0]
+eri_aaaa = pyscf.ao2mo.restore(4,pyscf.ao2mo.incore.general(mf._eri, (orbs[0],orbs[0],orbs[0],orbs[0]), compact=False),nmo)
+eri_bbbb = pyscf.ao2mo.restore(4,pyscf.ao2mo.incore.general(mf._eri, (orbs[1],orbs[1],orbs[1],orbs[1]), compact=False),nmo)
+eri_aabb = pyscf.ao2mo.restore(4,pyscf.ao2mo.incore.general(mf._eri, (orbs[0],orbs[0],orbs[1],orbs[1]), compact=False),nmo)
+h_core = mf.get_hcore(mol)
+h_aa = reduce(numpy.dot, (orbs[0].T, h_core, orbs[0]))
+h_bb = reduce(numpy.dot, (orbs[1].T, h_core, orbs[1]))
+nuc = mol.energy_nuc() 
+float_format = '% 0.20E'
+if mol.symmetry:
+        groupname = mol.groupname
+        if groupname in ('SO3', 'Dooh'):
+            logger.info(mol, 'Lower symmetry from %s to D2h', groupname)
+            raise RuntimeError('Lower symmetry from %s to D2h' % groupname)
+        elif groupname == 'Coov':
+            logger.info(mol, 'Lower symmetry from Coov to C2v')
+            raise RuntimeError('''Lower symmetry from Coov to C2v''')
+mol.orbsym = pyscf.symm.label_orb_symm(mol,mol.irrep_name,mol.symm_orb,orbs[0])
+mol.orbsym = numpy.array(mol.orbsym)
+unique_values, indices = numpy.unique(mol.orbsym, return_index=True)
+sorted_unique_values = unique_values[numpy.argsort(indices)]
+sorted_orbsym = []
+for value in sorted_unique_values:
+    sorted_orbsym.extend([value] * numpy.count_nonzero(mol.orbsym == value))
+orbsym = [param.IRREP_ID_TABLE[groupname][i]+1 for i in sorted_orbsym] 
+a_inds = [i+1 for i in range(orbs[0].shape[1])]
+print(a_inds)
+b_inds = [i+1 for i in range(orbs[1].shape[1])]
+print(b_inds)
+nelec = mol.nelec
+tol=1e-18
+with open('fort.55', 'w') as fout:
+        if not isinstance(nelec, (int, numpy.number)):
+            ms = abs(nelec[0] - nelec[1])
+            nelec = nelec[0] + nelec[1]
+        else: ms=0
+        fout.write(f"{nmo:1d} {nelec:1d}\n")
+        if orbsym is not None and len(orbsym) > 0:
+            fout.write(f"{' '.join([str(x) for x in orbsym])}\n")
+        else:
+            fout.write(f"{' 1' * nmo}\n")
+        fout.write(' 150000\n')
+        """ if not isinstance(nelec, (int, numpy.number)):
+            ms = abs(nelec[0] - nelec[1])
+            nelec = nelec[0] + nelec[1]
+        else: ms=0
+        fout.write(' &UHF NORB=%4d,NELEC=%2d,MS2=%d,\n' % (nmo, nelec, ms))
+        if orbsym is not None and len(orbsym) > 0:
+            fout.write('  ORBSYM=%s\n' % ','.join([str(x) for x in orbsym]))
+        else:
+            fout.write('  ORBSYM=%s\n' % ('1,' *nmo))
+        fout.write('  ISYM=1, UHF=TRUE\n')
+        fout.write(' &END\n') """
+        output_format = float_format + ' %5d %5d %5d %5d\n'
+        #4-fold symmetry
+        kl = 0
+        for l in range(nmo):
+            for k in range(0, l+1):
+                ij = 0
+                for i in range(0, nmo):
+                    for j in range(0, i+1):
+                        if i >= k:
+                            if abs(eri_aaaa[ij,kl]) > tol:
+                                fout.write(output_format % (eri_aaaa[ij,kl], a_inds[i], a_inds[j], b_inds[k], b_inds[l]))
+                        ij += 1
+                kl += 1
+        fout.write(' 0.00000000000000000000E+00' + '     0     0     0     0\n')
+        kl = 0
+        for l in range(nmo):
+            for k in range(0, l+1):
+                ij = 0
+                for i in range(0, nmo):
+                    for j in range(0, i+1):
+                        if i >= k:
+                            if abs(eri_bbbb[ij,kl]) > tol:
+                                fout.write(output_format % (eri_bbbb[ij,kl], a_inds[i], a_inds[j], b_inds[k], b_inds[l]))
+                        ij += 1
+                kl += 1
+        fout.write(' 0.00000000000000000000E+00' + '     0     0     0     0\n')
+        ij = 0
+        for j in range(nmo):
+            for i in range(0, j+1):
+                kl = 0
+                for k in range(0, nmo):
+                    for l in range(0, k+1):
+                        if abs(eri_aabb[ij,kl]) > tol:
+                            fout.write(output_format % (eri_aabb[ij,kl], a_inds[i], a_inds[j], b_inds[k], b_inds[l]))
+                        kl += 1
+                ij += 1
+        fout.write(' 0.00000000000000000000E+00' + '     0     0     0     0\n')
+        h_aa = h_aa.reshape(nmo,nmo)
+        h_bb = h_bb.reshape(nmo,nmo)
+        output_format = float_format + ' %5d %5d     0     0\n'
+        for i in range(nmo):
+            for j in range(nmo):
+                fout.write(output_format % (h_aa[i,j], a_inds[i], a_inds[j]))
+        fout.write(' 0.00000000000000000000E+00' + '     0     0     0     0\n')
+        for i in range(nmo):
+            for j in range(nmo):
+                fout.write(output_format % (h_bb[i,j], b_inds[i], b_inds[j]))
+        fout.write(' 0.00000000000000000000E+00' + '     0     0     0     0\n')
+        output_format = float_format + '     0     0     0     0\n'
+        fout.write(output_format % nuc)
+
+
+
+def write_uhf_integrals_fort55(mf,mol,nmo,nelec,orbs,orbsym,tol=1e-15):
+    eri_aaaa = pyscf.ao2mo.restore(4,pyscf.ao2mo.incore.general(mf._eri, (orbs[0],orbs[0],orbs[0],orbs[0]), compact=False),nmo)
+    eri_bbbb = pyscf.ao2mo.restore(4,pyscf.ao2mo.incore.general(mf._eri, (orbs[1],orbs[1],orbs[1],orbs[1]), compact=False),nmo)
+    eri_aabb = pyscf.ao2mo.restore(4,pyscf.ao2mo.incore.general(mf._eri, (orbs[0],orbs[0],orbs[1],orbs[1]), compact=False),nmo)
+    h_core = mf.get_hcore(mol)
+    h_aa = reduce(numpy.dot, (orbs[0].T, h_core, orbs[0]))
+    h_bb = reduce(numpy.dot, (orbs[1].T, h_core, orbs[1]))
+    nuc = mol.energy_nuc() 
+    float_format = ' %.16g'
+    if mol.symmetry:
+        groupname = mol.groupname
+        if groupname in ('SO3', 'Dooh'):
+            logger.info(mol, 'Lower symmetry from %s to D2h', groupname)
+            raise RuntimeError('Lower symmetry from %s to D2h' % groupname)
+        elif groupname == 'Coov':
+            logger.info(mol, 'Lower symmetry from Coov to C2v')
+            raise RuntimeError('''Lower symmetry from Coov to C2v''')
+    mol.orbsym = pyscf.symm.label_orb_symm(mol,mol.irrep_name,mol.symm_orb,orbs[0])
+    mol.orbsym = numpy.array(mol.orbsym)
+    unique_values, indices = numpy.unique(mol.orbsym, return_index=True)
+    sorted_unique_values = unique_values[numpy.argsort(indices)]
+    sorted_orbsym = []
+    for value in sorted_unique_values:
+        sorted_orbsym.extend([value] * numpy.count_nonzero(mol.orbsym == value))
+    orbsym = [param.IRREP_ID_TABLE[groupname][i]+1 for i in sorted_orbsym] 
+    a_inds = [i+1 for i in range(orbs[0].shape[1])]
+    b_inds = [i+1 for i in range(orbs[1].shape[1])]
+    nelec = mol.nelec
+#INFO: ******************** input file end ********************
+
+
+System: uname_result(system='Darwin', node='Mhrzzs-MacBook-Air.local', release='23.6.0', version='Darwin Kernel Version 23.6.0: Mon Jul 29 21:16:46 PDT 2024; root:xnu-10063.141.2~1/RELEASE_ARM64_T8112', machine='arm64')  Threads 1
+Python 3.11.9 (main, Apr  2 2024, 08:25:04) [Clang 15.0.0 (clang-1500.3.9.4)]
+numpy 1.26.4  scipy 1.10.1  h5py 3.10.0
+Date: Tue Sep  3 21:06:35 2024
+PySCF version 2.6.0
+PySCF path  /opt/homebrew/lib/python3.11/site-packages/pyscf
+
+[CONFIG] ARGPARSE = False
+[CONFIG] DEBUG = False
+[CONFIG] MAX_MEMORY = 4000
+[CONFIG] TMPDIR = /var/folders/sv/p893skhd53z1sh_0fgwlc_0w0000gn/T
+[CONFIG] UNIT = angstrom
+[CONFIG] VERBOSE = 3
+[CONFIG] conf_file = None
+[INPUT] verbose = 9
+[INPUT] max_memory = 4000 
+[INPUT] num. atoms = 1
+[INPUT] num. electrons = 3
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 1
+[INPUT] symmetry True subgroup D2h
+[INPUT] Mole.unit = angstrom
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 Li     0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT] ---------------- BASIS SET ---------------- 
+[INPUT] l, kappa, [nprim/nctr], expnt,             c_1 c_2 ...
+[INPUT] Li
+[INPUT] 0    0    [2    /1   ]  6.163845031       0.4301284983
+                                1.097161308       0.6789135305
+[INPUT] 0    0    [2    /1   ]  0.245916322       0.0494717692
+                                0.06237087296     0.9637824081
+
+nuclear repulsion = 0
+point group symmetry = SO3, use subgroup D2h
+symmetry origin: [0. 0. 0.]
+symmetry axis x: [1. 0. 0.]
+symmetry axis y: [0. 1. 0.]
+symmetry axis z: [0. 0. 1.]
+num. orbitals of irrep Ag = 2
+number of shells = 2
+number of NR pGTOs = 4
+number of NR cGTOs = 2
+basis = {'LI': [[0, [6.163845031, 0.4301284983], [1.097161308, 0.6789135305]], [0, [0.245916322, 0.0494717692], [0.06237087296, 0.9637824081]]]}
+ecp = {}
+bas 0, expnt(s) = [6.16384503 1.09716131]
+bas 1, expnt(s) = [0.24591632 0.06237087]
+CPU time:         1.23
+arg.atm = [[ 3 20  1 23  0  0]]
+arg.bas = [[ 0  0  2  1  0 24 26  0]
+ [ 0  0  2  1  0 28 30  0]]
+arg.env = [0.         0.         0.         0.         0.         0.
+ 0.         0.         0.         0.         0.         0.
+ 0.         0.         0.         0.         0.         0.
+ 0.         0.         0.         0.         0.         0.
+ 6.16384503 1.09716131 4.2511069  1.83879092 0.24591632 0.06237087
+ 0.04364786 0.30389978]
+ecpbas  = []
+
+
+******** <class 'pyscf.scf.uhf_symm.SymAdaptedUHF'> ********
+method = SymAdaptedUHF
+initial guess = atom
+damping factor = 0
+level_shift factor = 0
+DIIS = <class 'pyscf.scf.diis.CDIIS'>
+diis_start_cycle = 1
+diis_space = 8
+diis_damp = 0
+SCF conv_tol = 1e-10
+SCF conv_tol_grad = None
+SCF max_cycles = 999
+direct_scf = True
+direct_scf_tol = 1e-15
+chkfile to save SCF result = out.chk
+max_memory 4000 MB (current use 0 MB)
+number electrons alpha = 2  beta = 1
+irrep_nelec {'Ag': 3}
+Freeze 3 electrons in irreps ['Ag']
+    0 free electrons in irreps 
+cond(S) = 1.7139876067470432
+Set gradient conv threshold to 1e-05
+Spherically averaged atomic HF for {'Li'}
+
+
+******** <class 'pyscf.scf.atom_hf.AtomSphAverageRHF'> ********
+method = AtomSphAverageRHF
+initial guess = minao
+damping factor = 0
+level_shift factor = 0
+DIIS = <class 'pyscf.scf.diis.CDIIS'>
+diis_start_cycle = 1
+diis_space = 8
+diis_damp = 0
+SCF conv_tol = 1e-09
+SCF conv_tol_grad = None
+SCF max_cycles = 50
+direct_scf = True
+direct_scf_tol = 1e-13
+chkfile to save SCF result = /var/folders/sv/p893skhd53z1sh_0fgwlc_0w0000gn/T/tmp66zm97qm
+max_memory 4000 MB (current use 0 MB)
+atom = Li
+Set gradient conv threshold to 3.16228e-05
+Initial guess from minao.
+Nelec from initial guess = 2.9413679114363394
+E1 = -9.40118446102189  E_coul = 2.4223066760821395
+init E= -6.97887778493975
+l = 0  e_0 = -2.26959612
+l = 0  e_1 = -0.0396201242
+    CPU time for initialize scf      0.01 sec, wall time      0.01 sec
+l = 0  e_0 = -2.26959612
+l = 0  e_1 = -0.0396201242
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.476248387455765  E_coul = 2.475358811562673
+cycle= 1 E= -7.00088957589309  delta_E= -0.022  |g|=    0  |ddm|= 0.0572
+    CPU time for cycle= 1      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0.00678324
+diis-c [-4.60123147e-05  1.00000000e+00]
+l = 0  e_0 = -2.24799321
+l = 0  e_1 = -0.0295547193
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475380459601663  E_coul = 2.4744798242717203
+cycle= 2 E= -7.00090063532994  delta_E= -1.11e-05  |g|=    0  |ddm|= 0.00337
+    CPU time for cycle= 2      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0.000450036
+diis-c [-1.49110574e-22 -7.10597808e-02  1.07105978e+00]
+l = 0  e_0 = -2.24844951
+l = 0  e_1 = -0.0295843552
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475317611483543  E_coul = 2.4744169272771783
+cycle= 3 E= -7.00090068420637  delta_E= -4.89e-08  |g|=    0  |ddm|= 0.000239
+    CPU time for cycle= 3      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=5.2598e-08
+Linear dependence found in DIIS error vectors.
+diis-c [ 2.03187422e-16 -3.30125671e-02  4.97649707e-01  5.35362860e-01]
+l = 0  e_0 = -2.24844959
+l = 0  e_1 = -0.0295844014
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475317615420856  E_coul = 2.47441693121449
+cycle= 4 E= -7.00090068420637  delta_E= -8.88e-16  |g|=    0  |ddm|= 1.5e-08
+    CPU time for cycle= 4      0.00 sec, wall time      0.00 sec
+l = 0  e_0 = -2.24844966
+l = 0  e_1 = -0.0295844416
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475317618610886  E_coul = 2.474416934404518
+Extra cycle  E= -7.00090068420637  delta_E= -1.78e-15  |g|=    0  |ddm|= 1.21e-08
+    CPU time for scf_cycle      0.01 sec, wall time      0.01 sec
+    CPU time for SCF      0.01 sec, wall time      0.01 sec
+Atomic HF for atom  Li  converged. SCF energy = -7.00090068420637
+
+Atom Li, E = -7.00090068421
+Nelec from initial guess = (1.5, 1.5)
+E1 = -9.475317618610886  Ecoul = 2.474416934404518
+init E= -7.00090068420637
+    CPU time for initialize scf      0.03 sec, wall time      0.01 sec
+E1 = -9.475317618822118  Ecoul = 2.404519338274542
+cycle= 1 E= -7.07079828054758  delta_E= -0.0699  |g|= 0.00669  |ddm|= 0.833
+    CPU time for cycle= 1      0.01 sec, wall time      0.00 sec
+diis-norm(errvec)=0.00945958
+diis-c [-8.9483718e-05  1.0000000e+00]
+E1 = -9.474119740498535  Ecoul = 2.4032993567519645
+cycle= 2 E= -7.07082038374657  delta_E= -2.21e-05  |g|= 0.00105  |ddm|= 0.00445
+    CPU time for cycle= 2      0.01 sec, wall time      0.00 sec
+diis-norm(errvec)=0.00147878
+diis-c [-3.86894563e-23 -1.85292390e-01  1.18529239e+00]
+E1 = -9.473891812089402  Ecoul = 2.403070874662098
+cycle= 3 E= -7.0708209374273  delta_E= -5.54e-07  |g|= 1.78e-16  |ddm|= 0.000824
+    CPU time for cycle= 3      0.01 sec, wall time      0.00 sec
+diis-norm(errvec)=1.98779e-16
+Linear dependence found in DIIS error vectors.
+diis-c [ 5.58013300e-16 -7.59628123e-02  4.85924669e-01  5.90038143e-01]
+E1 = -9.473891812089406  Ecoul = 2.403070874662099
+cycle= 4 E= -7.07082093742731  delta_E= -2.66e-15  |g|= 6.5e-16  |ddm|= 8e-16
+    CPU time for cycle= 4      0.01 sec, wall time      0.00 sec
+E1 = -9.473891812089402  Ecoul = 2.403070874662098
+Extra cycle  E= -7.0708209374273  delta_E= 2.66e-15  |g|= 7.09e-17  |ddm|= 8.02e-16
+    CPU time for scf_cycle      0.07 sec, wall time      0.02 sec
+    CPU time for SCF      0.07 sec, wall time      0.02 sec
+converged SCF energy = -7.0708209374273  <S^2> = 0.75  2S+1 = 2
+irreps of each MO ['Ag' 'Ag']

@@ -1,0 +1,673 @@
+#INFO: **** input file is /Users/jmhrzz/HPQC/ForkedRepo/PySCF-PySCF/ATOM/Li/ROHF/STO-2G/inp.py ****
+import numpy as np
+import pyscf
+from pyscf import cc, lib, tools, scf, symm, ao2mo
+from pyscf.tools import fcidump
+from pyscf.tools.fcidump import from_mo
+from pyscf.tools.fcidump import from_integrals
+from pyscf.gto.basis import parse_gaussian
+import pyscf.symm.param as param
+import pyscf.lib.logger as logger
+
+def write_head(fout, nmo, nelec, ms=0, orbsym=None):
+    if not isinstance(nelec, (int, np.number)):
+        ms = abs(nelec[0] - nelec[1])
+        nelec = nelec[0] + nelec[1]
+    fout.write(f" {nmo:4d} {nelec:2d}\n")
+    if orbsym is not None and len(orbsym) > 0:
+        orbsym = [x + 1 for x in orbsym]
+        fout.write(f"{' '.join([str(x) for x in orbsym])}\n")
+    else:
+        fout.write(f"{' 1' * nmo}\n")
+    fout.write(' 150000\n')
+
+fcidump.write_head = write_head
+
+name = 'out'
+mol = pyscf.M(
+    atom = '''
+        LI
+    ''',
+    unit = 'angstrom',
+    basis = {
+            'LI' : parse_gaussian.load('STO-2G.gbs', 'LI')
+    },
+    charge = 0,
+    spin = 1,
+    verbose = 9,
+    symmetry = True,
+    output = name +'.txt',
+    symmetry_subgroup = 'D2h',
+    max_memory = 4000,
+)
+
+mf = mol.ROHF().set(conv_tol=1e-10,max_cycle=999,ddm_tol=1e-14,direct_scf_tol=1e-14,chkfile=name+'.chk',init_guess='atom',irrep_nelec={'Ag': 3})
+mf.kernel()
+pyscf.tools.fcidump.from_chkfile('fort.55',name+'.chk',tol=1e-18,float_format='% 0.20E',molpro_orbsym=False,orbsym=None)
+#INFO: ******************** input file end ********************
+
+
+System: uname_result(system='Darwin', node='Mhrzzs-MacBook-Air.local', release='24.1.0', version='Darwin Kernel Version 24.1.0: Thu Oct 10 21:02:45 PDT 2024; root:xnu-11215.41.3~2/RELEASE_ARM64_T8112', machine='arm64')  Threads 1
+Python 3.11.10 (main, Sep  7 2024, 01:03:31) [Clang 16.0.0 (clang-1600.0.26.3)]
+numpy 2.1.1  scipy 1.14.1  h5py 3.11.0
+Date: Fri Nov  8 08:52:00 2024
+PySCF version 2.6.2
+PySCF path  /Users/jmhrzz/HPQC/PySCF/pyscf-test/lib/python3.11/site-packages/pyscf
+
+[CONFIG] ARGPARSE = False
+[CONFIG] DEBUG = False
+[CONFIG] MAX_MEMORY = 4000
+[CONFIG] TMPDIR = /var/folders/sv/p893skhd53z1sh_0fgwlc_0w0000gn/T
+[CONFIG] UNIT = angstrom
+[CONFIG] VERBOSE = 3
+[CONFIG] conf_file = None
+[INPUT] verbose = 9
+[INPUT] max_memory = 4000 
+[INPUT] num. atoms = 1
+[INPUT] num. electrons = 3
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 1
+[INPUT] symmetry True subgroup D2h
+[INPUT] Mole.unit = angstrom
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 Li     0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT] ---------------- BASIS SET ---------------- 
+[INPUT] l, kappa, [nprim/nctr], expnt,             c_1 c_2 ...
+[INPUT] Li
+[INPUT] 0    0    [2    /1   ]  6.163845031       0.4301284983
+                                1.097161308       0.6789135305
+[INPUT] 0    0    [2    /1   ]  0.245916322       0.0494717692
+                                0.06237087296     0.9637824081
+
+nuclear repulsion = 0
+point group symmetry = SO3, use subgroup D2h
+symmetry origin: [0. 0. 0.]
+symmetry axis x: [1. 0. 0.]
+symmetry axis y: [0. 1. 0.]
+symmetry axis z: [0. 0. 1.]
+num. orbitals of irrep Ag = 2
+number of shells = 2
+number of NR pGTOs = 4
+number of NR cGTOs = 2
+basis = {'LI': [[0, [6.163845031, 0.4301284983], [1.097161308, 0.6789135305]], [0, [0.245916322, 0.0494717692], [0.06237087296, 0.9637824081]]]}
+ecp = {}
+bas 0, expnt(s) = [6.16384503 1.09716131]
+bas 1, expnt(s) = [0.24591632 0.06237087]
+CPU time:         0.29
+arg.atm = [[ 3 20  1 23  0  0]]
+arg.bas = [[ 0  0  2  1  0 24 26  0]
+ [ 0  0  2  1  0 28 30  0]]
+arg.env = [0.         0.         0.         0.         0.         0.
+ 0.         0.         0.         0.         0.         0.
+ 0.         0.         0.         0.         0.         0.
+ 0.         0.         0.         0.         0.         0.
+ 6.16384503 1.09716131 4.2511069  1.83879092 0.24591632 0.06237087
+ 0.04364786 0.30389978]
+ecpbas  = []
+
+
+******** <class 'pyscf.scf.hf_symm.SymAdaptedROHF'> ********
+method = SymAdaptedROHF
+initial guess = atom
+damping factor = 0
+level_shift factor = 0
+DIIS = <class 'pyscf.scf.diis.CDIIS'>
+diis_start_cycle = 1
+diis_space = 8
+diis_damp = 0
+SCF conv_tol = 1e-10
+SCF conv_tol_grad = None
+SCF ddm_tol = 1e-14
+SCF max_cycles = 999
+direct_scf = True
+direct_scf_tol = 1e-14
+chkfile to save SCF result = out.chk
+max_memory 4000 MB (current use 0 MB)
+num. doubly occ = 1  num. singly occ = 1
+irrep_nelec {'Ag': 3}
+Freeze 3 electrons in irreps ['Ag']
+    0 free electrons in irreps 
+cond(S) = 1.7139876067470432
+Set gradient conv threshold to 1e-05
+Initial guess from the superpostion of atomic densties.
+Spherically averaged atomic HF for {'Li'}
+
+
+******** <class 'pyscf.scf.atom_hf.AtomSphAverageRHF'> ********
+method = AtomSphAverageRHF
+initial guess = minao
+damping factor = 0
+level_shift factor = 0
+DIIS = <class 'pyscf.scf.diis.CDIIS'>
+diis_start_cycle = 1
+diis_space = 8
+diis_damp = 0
+SCF conv_tol = 1e-09
+SCF conv_tol_grad = None
+SCF ddm_tol = 1e-10
+SCF max_cycles = 50
+direct_scf = True
+direct_scf_tol = 1e-13
+chkfile to save SCF result = /var/folders/sv/p893skhd53z1sh_0fgwlc_0w0000gn/T/tmpvv2iy3kz
+max_memory 4000 MB (current use 0 MB)
+atom = Li
+Set gradient conv threshold to 3.16228e-05
+Initial guess from minao.
+Nelec from initial guess = 2.9413679114363394
+E1 = -9.40118446102189  E_coul = 2.4223066760821395
+init E= -6.97887778493975
+l = 0  e_0 = -2.26959612
+l = 0  e_1 = -0.0396201242
+    CPU time for initialize scf      0.01 sec, wall time      0.01 sec
+l = 0  e_0 = -2.26959612
+l = 0  e_1 = -0.0396201242
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.476248387455765  E_coul = 2.475358811562673
+cycle= 1 E= -7.00088957589309  delta_E= -0.022  |g|=    0  |ddm|= 0.0578
+    CPU time for cycle= 1      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0.00678324
+diis-c [-4.60123147e-05  1.00000000e+00]
+l = 0  e_0 = -2.24799321
+l = 0  e_1 = -0.0295547193
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475380459601663  E_coul = 2.4744798242717203
+cycle= 2 E= -7.00090063532994  delta_E= -1.11e-05  |g|=    0  |ddm|= 0.00355
+    CPU time for cycle= 2      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0.000450036
+diis-c [ 3.05756269e-23 -7.10597808e-02  1.07105978e+00]
+l = 0  e_0 = -2.24844951
+l = 0  e_1 = -0.0295843552
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475317611483543  E_coul = 2.4744169272771783
+cycle= 3 E= -7.00090068420637  delta_E= -4.89e-08  |g|=    0  |ddm|= 0.000252
+    CPU time for cycle= 3      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=5.2598e-08
+Linear dependence found in DIIS error vectors.
+diis-c [ 2.07950824e-16 -3.30125671e-02  4.97649707e-01  5.35362860e-01]
+l = 0  e_0 = -2.24844959
+l = 0  e_1 = -0.0295844014
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475317615420856  E_coul = 2.47441693121449
+cycle= 4 E= -7.00090068420637  delta_E= -8.88e-16  |g|=    0  |ddm|= 1.58e-08
+    CPU time for cycle= 4      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.44355e-08
+Linear dependence found in DIIS error vectors.
+diis-c [ 3.89880795e-16 -2.15002294e-02  3.24125293e-01  3.48688237e-01
+  3.48686700e-01]
+l = 0  e_0 = -2.24844961
+l = 0  e_1 = -0.0295844154
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475317616612196  E_coul = 2.4744169324058296
+cycle= 5 E= -7.00090068420637  delta_E= -8.88e-16  |g|=    0  |ddm|= 4.78e-09
+    CPU time for cycle= 5      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.59141e-08
+Linear dependence found in DIIS error vectors.
+diis-c [ 2.22753148e-16 -1.59409954e-02  2.40326571e-01  2.58539016e-01
+  2.58537877e-01  2.58537532e-01]
+l = 0  e_0 = -2.24844962
+l = 0  e_1 = -0.0295844221
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475317617187487  E_coul = 2.4744169329811205
+cycle= 6 E= -7.00090068420637  delta_E=    0  |g|=    0  |ddm|= 2.31e-09
+    CPU time for cycle= 6      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.17992e-08
+Linear dependence found in DIIS error vectors.
+diis-c [ 5.24118577e-17 -1.26659264e-02  1.90956992e-01  2.05428083e-01
+  2.05427177e-01  2.05426903e-01  2.05426771e-01]
+l = 0  e_0 = -2.24844963
+l = 0  e_1 = -0.0295844261
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475317617526395  E_coul = 2.474416933320031
+cycle= 7 E= -7.00090068420636  delta_E= 2.66e-15  |g|=    0  |ddm|= 1.36e-09
+    CPU time for cycle= 7      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=9.37506e-09
+Linear dependence found in DIIS error vectors.
+diis-c [ 1.16573756e-16 -1.05071844e-02  1.58414414e-01  1.70419348e-01
+  1.70418597e-01  1.70418370e-01  1.70418260e-01  1.70418195e-01]
+l = 0  e_0 = -2.24844963
+l = 0  e_1 = -0.0295844287
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475317617749793  E_coul = 2.4744169335434263
+cycle= 8 E= -7.00090068420637  delta_E= -2.66e-15  |g|=    0  |ddm|= 8.96e-10
+    CPU time for cycle= 8      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=7.77719e-09
+Linear dependence found in DIIS error vectors.
+diis-c [ 3.59310317e-16 -8.97712325e-03  1.35348549e-01  1.45605498e-01
+  1.45604856e-01  1.45604662e-01  1.45604568e-01  1.45604513e-01
+  1.45604477e-01]
+l = 0  e_0 = -2.24844964
+l = 0  e_1 = -0.0295844305
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475317617908129  E_coul = 2.4744169337017623
+cycle= 9 E= -7.00090068420637  delta_E= 8.88e-16  |g|=    0  |ddm|= 6.35e-10
+    CPU time for cycle= 9      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=6.64467e-09
+Linear dependence found in DIIS error vectors.
+diis-c [2.83355629e-16 1.42847595e-01 4.08032810e-05 1.42862177e-01
+ 1.42853241e-01 1.42850537e-01 1.42849231e-01 1.42848462e-01
+ 1.42847955e-01]
+l = 0  e_0 = -2.24844965
+l = 0  e_1 = -0.0295844414
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475317618837117  E_coul = 2.4744169346307503
+cycle= 10 E= -7.00090068420637  delta_E= -8.88e-16  |g|=    0  |ddm|= 3.73e-09
+    CPU time for cycle= 10      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.30009e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-8.32667268e-17  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+l = 0  e_0 = -2.24844966
+l = 0  e_1 = -0.0295844415
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475317618688345  E_coul = 2.4744169344819795
+cycle= 11 E= -7.00090068420637  delta_E= 8.88e-16  |g|=    0  |ddm|= 5.97e-10
+    CPU time for cycle= 11      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.06397e-09
+Linear dependence found in DIIS error vectors.
+diis-c [-4.16333634e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+l = 0  e_0 = -2.24844965
+l = 0  e_1 = -0.0295844415
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475317618747985  E_coul = 2.474416934541617
+cycle= 12 E= -7.00090068420637  delta_E= -1.78e-15  |g|=    0  |ddm|= 2.39e-10
+    CPU time for cycle= 12      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=6.37418e-10
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+l = 0  e_0 = -2.24844965
+l = 0  e_1 = -0.0295844415
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475317618775517  E_coul = 2.474416934569153
+cycle= 13 E= -7.00090068420636  delta_E= 3.55e-15  |g|=    0  |ddm|= 1.1e-10
+    CPU time for cycle= 13      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=4.40439e-10
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+l = 0  e_0 = -2.24844965
+l = 0  e_1 = -0.0295844415
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475317618793426  E_coul = 2.47441693458706
+cycle= 14 E= -7.00090068420637  delta_E= -1.78e-15  |g|=    0  |ddm|= 7.18e-11
+    CPU time for cycle= 14      0.00 sec, wall time      0.00 sec
+l = 0  e_0 = -2.24844965
+l = 0  e_1 = -0.0295844414
+l = 0  occ = 1 + 1
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -9.475317618834207  E_coul = 2.47441693462784
+Extra cycle  E= -7.00090068420637  delta_E= -1.78e-15  |g|=    0  |ddm|= 7.18e-11
+    CPU time for scf_cycle      0.01 sec, wall time      0.01 sec
+    CPU time for SCF      0.01 sec, wall time      0.01 sec
+Atomic HF for atom  Li  converged. SCF energy = -7.00090068420637
+
+Atom Li, E = -7.00090068421
+Nelec from initial guess = (np.float64(1.5), np.float64(1.5))
+E1 = -9.475317618834207  Ecoul = 2.47441693462784
+init E= -7.00090068420637
+    CPU time for initialize scf      0.01 sec, wall time      0.02 sec
+E1 = -9.475317618836907  Ecoul = 2.4045193382898136
+cycle= 1 E= -7.07079828054709  delta_E= -0.0699  |g|= 0.00669  |ddm|= 1.07
+    CPU time for cycle= 1      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0.00945958
+diis-c [-8.94837199e-05  1.00000000e+00]
+E1 = -9.474052422826563  Ecoul = 2.403231759656867
+cycle= 2 E= -7.0708206631697  delta_E= -2.24e-05  |g|= 0.000736  |ddm|= 0.00496
+    CPU time for cycle= 2      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0.00104077
+diis-c [-8.59497048e-21 -1.23623989e-01  1.12362399e+00]
+E1 = -9.473891851143376  Ecoul = 2.403070913716087
+cycle= 3 E= -7.07082093742729  delta_E= -2.74e-07  |g|= 1.78e-07  |ddm|= 0.000613
+    CPU time for cycle= 3      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.52346e-07
+Linear dependence found in DIIS error vectors.
+diis-c [ 1.86057563e-16 -5.42896566e-02  4.93305110e-01  5.60984546e-01]
+E1 = -9.47389182924061  Ecoul = 2.4030708918133077
+cycle= 4 E= -7.0708209374273  delta_E= -1.42e-14  |g|= 7.84e-08  |ddm|= 8.34e-08
+    CPU time for cycle= 4      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.10822e-07
+Linear dependence found in DIIS error vectors.
+diis-c [ 3.57132807e-16 -3.47832276e-02  3.16020915e-01  3.59378208e-01
+  3.59384105e-01]
+E1 = -9.473891823078299  Ecoul = 2.403070885650995
+cycle= 5 E= -7.0708209374273  delta_E= -8.88e-16  |g|= 5.02e-08  |ddm|= 2.35e-08
+    CPU time for cycle= 5      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=7.10044e-08
+Linear dependence found in DIIS error vectors.
+diis-c [ 3.46869309e-16 -2.55894754e-02  2.32473605e-01  2.64368658e-01
+  2.64372996e-01  2.64374216e-01]
+E1 = -9.47389182017384  Ecoul = 2.403070882746536
+cycle= 6 E= -7.0708209374273  delta_E=    0  |g|= 3.69e-08  |ddm|= 1.11e-08
+    CPU time for cycle= 6      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=5.22373e-08
+Linear dependence found in DIIS error vectors.
+diis-c [ 2.95229522e-16 -2.02400036e-02  1.83864581e-01  2.09090686e-01
+  2.09094117e-01  2.09095082e-01  2.09095537e-01]
+E1 = -9.473891818483839  Ecoul = 2.403070881056533
+cycle= 7 E= -7.07082093742731  delta_E= -1.78e-15  |g|= 2.92e-08  |ddm|= 6.44e-09
+    CPU time for cycle= 7      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=4.13174e-08
+Linear dependence found in DIIS error vectors.
+diis-c [ 1.51989474e-16 -1.67405450e-02  1.52067879e-01  1.72931590e-01
+  1.72934427e-01  1.72935226e-01  1.72935602e-01  1.72935821e-01]
+E1 = -9.473891817378284  Ecoul = 2.403070879950977
+cycle= 8 E= -7.07082093742731  delta_E= -8.88e-16  |g|= 2.42e-08  |ddm|= 4.21e-09
+    CPU time for cycle= 8      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=3.41739e-08
+Linear dependence found in DIIS error vectors.
+diis-c [ 2.94078828e-16 -1.42728781e-02  1.29647231e-01  1.47434895e-01
+  1.47437314e-01  1.47437995e-01  1.47438316e-01  1.47438503e-01
+  1.47438625e-01]
+E1 = -9.47389181659869  Ecoul = 2.4030708791713815
+cycle= 9 E= -7.07082093742731  delta_E= -8.88e-16  |g|= 2.06e-08  |ddm|= 2.97e-09
+    CPU time for cycle= 9      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.91366e-08
+Linear dependence found in DIIS error vectors.
+diis-c [ 1.13654021e-16  1.42876328e-01 -8.11282761e-05  1.42845668e-01
+  1.42865108e-01  1.42870577e-01  1.42873155e-01  1.42874655e-01
+  1.42875636e-01]
+E1 = -9.473891812089754  Ecoul = 2.4030708746624474
+cycle= 10 E= -7.07082093742731  delta_E= 8.88e-16  |g|= 1.6e-12  |ddm|= 1.72e-08
+    CPU time for cycle= 10      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.25745e-12
+Linear dependence found in DIIS error vectors.
+diis-c [ 1.88205750e-16  1.99436386e-01  2.47905053e-01 -1.71901169e-01
+  6.35422909e-02  1.29783935e-01  1.61005356e-01  1.79171999e-01
+  1.91056149e-01]
+E1 = -9.473891812107022  Ecoul = 2.4030708746797154
+cycle= 11 E= -7.07082093742731  delta_E=    0  |g|= 8.05e-11  |ddm|= 6.58e-11
+    CPU time for cycle= 11      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.13825e-10
+Linear dependence found in DIIS error vectors.
+diis-c [ 1.47303069e-16  1.79791289e-01  3.00592040e-01  3.00129444e-01
+ -1.58903998e-01  6.19318757e-03  8.40078121e-02  1.29285398e-01
+  1.58904827e-01]
+E1 = -9.473891812145084  Ecoul = 2.4030708747177765
+cycle= 12 E= -7.07082093742731  delta_E=    0  |g|= 2.54e-10  |ddm|= 1.45e-10
+    CPU time for cycle= 12      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=3.59764e-10
+Linear dependence found in DIIS error vectors.
+diis-c [-6.66133815e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812576376  Ecoul = 2.403070875149071
+cycle= 13 E= -7.0708209374273  delta_E= 1.78e-15  |g|= 2.22e-09  |ddm|= 1.64e-09
+    CPU time for cycle= 13      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=3.14655e-09
+Linear dependence found in DIIS error vectors.
+diis-c [-1.94289029e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.47389181243166  Ecoul = 2.403070875004355
+cycle= 14 E= -7.0708209374273  delta_E=    0  |g|= 1.56e-09  |ddm|= 5.51e-10
+    CPU time for cycle= 14      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.21148e-09
+Linear dependence found in DIIS error vectors.
+diis-c [1.11022302e-16 1.25000000e-01 1.25000000e-01 1.25000000e-01
+ 1.25000000e-01 1.25000000e-01 1.25000000e-01 1.25000000e-01
+ 1.25000000e-01]
+E1 = -9.473891812324975  Ecoul = 2.4030708748976704
+cycle= 15 E= -7.0708209374273  delta_E=    0  |g|= 1.08e-09  |ddm|= 4.06e-10
+    CPU time for cycle= 15      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.52214e-09
+Linear dependence found in DIIS error vectors.
+diis-c [-4.16333634e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812240105  Ecoul = 2.4030708748128013
+cycle= 16 E= -7.0708209374273  delta_E= 1.78e-15  |g|= 6.89e-10  |ddm|= 3.23e-10
+    CPU time for cycle= 16      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=9.73769e-10
+Linear dependence found in DIIS error vectors.
+diis-c [-3.88578059e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812169303  Ecoul = 2.403070874741999
+cycle= 17 E= -7.0708209374273  delta_E=    0  |g|= 3.65e-10  |ddm|= 2.7e-10
+    CPU time for cycle= 17      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=5.16278e-10
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812108267  Ecoul = 2.4030708746809624
+cycle= 18 E= -7.0708209374273  delta_E= -1.78e-15  |g|= 8.62e-11  |ddm|= 2.33e-10
+    CPU time for cycle= 18      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.21897e-10
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812108524  Ecoul = 2.403070874681219
+cycle= 19 E= -7.0708209374273  delta_E=    0  |g|= 8.74e-11  |ddm|= 9.72e-13
+    CPU time for cycle= 19      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.23545e-10
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812108544  Ecoul = 2.403070874681238
+cycle= 20 E= -7.07082093742731  delta_E= -8.88e-16  |g|= 8.75e-11  |ddm|= 7.88e-14
+    CPU time for cycle= 20      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.23679e-10
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812108043  Ecoul = 2.4030708746807363
+cycle= 21 E= -7.07082093742731  delta_E= -8.88e-16  |g|= 8.52e-11  |ddm|= 1.92e-12
+    CPU time for cycle= 21      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.20426e-10
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812101591  Ecoul = 2.4030708746742837
+cycle= 22 E= -7.07082093742731  delta_E= -8.88e-16  |g|= 5.57e-11  |ddm|= 2.46e-11
+    CPU time for cycle= 22      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=7.87268e-11
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812097037  Ecoul = 2.4030708746697327
+cycle= 23 E= -7.0708209374273  delta_E= 3.55e-15  |g|= 3.49e-11  |ddm|= 1.73e-11
+    CPU time for cycle= 23      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=4.93385e-11
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812093903  Ecoul = 2.403070874666595
+cycle= 24 E= -7.07082093742731  delta_E= -4.44e-15  |g|= 2.05e-11  |ddm|= 1.2e-11
+    CPU time for cycle= 24      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.90425e-11
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812091882  Ecoul = 2.4030708746645777
+cycle= 25 E= -7.0708209374273  delta_E= 4.44e-15  |g|= 1.13e-11  |ddm|= 7.68e-12
+    CPU time for cycle= 25      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.60255e-11
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.47389181209082  Ecoul = 2.4030708746635137
+cycle= 26 E= -7.07082093742731  delta_E= -1.78e-15  |g|= 6.46e-12  |ddm|= 4.06e-12
+    CPU time for cycle= 26      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=9.13128e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812090578  Ecoul = 2.403070874663271
+cycle= 27 E= -7.07082093742731  delta_E= -8.88e-16  |g|= 5.36e-12  |ddm|= 9.16e-13
+    CPU time for cycle= 27      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=7.57811e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812090333  Ecoul = 2.403070874663026
+cycle= 28 E= -7.07082093742731  delta_E=    0  |g|= 4.23e-12  |ddm|= 9.42e-13
+    CPU time for cycle= 28      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=5.97906e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.47389181209008  Ecoul = 2.403070874662774
+cycle= 29 E= -7.07082093742731  delta_E=    0  |g|= 3.08e-12  |ddm|= 9.56e-13
+    CPU time for cycle= 29      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=4.35735e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812089828  Ecoul = 2.403070874662526
+cycle= 30 E= -7.0708209374273  delta_E= 4.44e-15  |g|= 1.95e-12  |ddm|= 9.43e-13
+    CPU time for cycle= 30      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.75809e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812089668  Ecoul = 2.4030708746623644
+cycle= 31 E= -7.0708209374273  delta_E= -1.78e-15  |g|= 1.21e-12  |ddm|= 6.17e-13
+    CPU time for cycle= 31      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.71208e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812089567  Ecoul = 2.4030708746622618
+cycle= 32 E= -7.0708209374273  delta_E= -8.88e-16  |g|= 7.46e-13  |ddm|= 3.87e-13
+    CPU time for cycle= 32      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.05528e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812089509  Ecoul = 2.4030708746622027
+cycle= 33 E= -7.07082093742731  delta_E= -8.88e-16  |g|= 4.74e-13  |ddm|= 2.27e-13
+    CPU time for cycle= 33      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=6.69242e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812089477  Ecoul = 2.403070874662169
+cycle= 34 E= -7.07082093742731  delta_E= -1.78e-15  |g|= 3.24e-13  |ddm|= 1.25e-13
+    CPU time for cycle= 34      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=4.57849e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812089454  Ecoul = 2.403070874662149
+cycle= 35 E= -7.0708209374273  delta_E= 2.66e-15  |g|= 2.39e-13  |ddm|= 7.08e-14
+    CPU time for cycle= 35      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=3.37249e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812089443  Ecoul = 2.403070874662136
+cycle= 36 E= -7.07082093742731  delta_E= -1.78e-15  |g|= 1.69e-13  |ddm|= 5.82e-14
+    CPU time for cycle= 36      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.38745e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.47389181208943  Ecoul = 2.4030708746621245
+cycle= 37 E= -7.07082093742731  delta_E= 8.88e-16  |g|= 1.13e-13  |ddm|= 4.66e-14
+    CPU time for cycle= 37      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.59482e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812089422  Ecoul = 2.4030708746621148
+cycle= 38 E= -7.07082093742731  delta_E= -8.88e-16  |g|= 7.24e-14  |ddm|= 3.41e-14
+    CPU time for cycle= 38      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.02105e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812089416  Ecoul = 2.40307087466211
+cycle= 39 E= -7.07082093742731  delta_E=    0  |g|= 4.64e-14  |ddm|= 2.15e-14
+    CPU time for cycle= 39      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=6.59954e-14
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.473891812089411  Ecoul = 2.403070874662105
+cycle= 40 E= -7.07082093742731  delta_E= 8.88e-16  |g|= 3.03e-14  |ddm|= 1.36e-14
+    CPU time for cycle= 40      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=4.26354e-14
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+E1 = -9.47389181208941  Ecoul = 2.4030708746621032
+cycle= 41 E= -7.07082093742731  delta_E=    0  |g|= 2.02e-14  |ddm|= 8.24e-15
+    CPU time for cycle= 41      0.00 sec, wall time      0.00 sec
+E1 = -9.473891812089407  Ecoul = 2.4030708746621006
+Extra cycle  E= -7.07082093742731  delta_E= -8.88e-16  |g|= 2.37e-15  |ddm|= 8.24e-15
+    CPU time for scf_cycle      0.05 sec, wall time      0.05 sec
+    CPU time for SCF      0.05 sec, wall time      0.05 sec
+converged SCF energy = -7.07082093742731

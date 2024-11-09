@@ -1,0 +1,2078 @@
+#INFO: **** input file is /Users/jmhrzz/HPQC/ForkedRepo/PySCF-PySCF/ATOM/Be/Be+/Non-Standard/5-21G/inp.py ****
+import os, sys, glob, subprocess, textwrap, numpy
+import pyscf
+from functools import reduce
+from pyscf import cc, lib, tools, scf, symm, ao2mo
+from pyscf.tools.fcidump import from_mo
+from pyscf.tools.fcidump import from_integrals
+from pyscf.gto.basis import parse_gaussian
+import pyscf.symm.param as param
+import pyscf.lib.logger as logger
+from subprocess import call
+from io import StringIO
+name = 'out'
+mol = pyscf.M(
+    atom = '''
+        BE
+    ''',
+    unit = 'angstrom',
+    basis = {
+            'BE' : parse_gaussian.load('Be-5-21G-EMSL.gbs', 'BE')
+    },
+    charge = +1,
+    spin = 1,
+    symmetry = True,
+    verbose = 9,
+    symmetry_subgroup = 'D2h',
+    output = name +'.txt',
+    max_memory = 4000,
+)
+mf = mol.UHF().set(conv_tol=1e-10,max_cycle=999,ddm_tol=1e-14,direct_scf_tol=1e-13,chkfile=name+'.chk',init_guess='atom',irrep_nelec={'Ag':3})
+mf.kernel()
+mycc = cc.UCCSD(mf).set(conv_tol=1e-10).run()
+et = mycc.ccsd_t()
+print('CCSD total energy', mycc.e_tot)
+print('CCSD(T) total energy', mycc.e_tot + et)
+
+orbs = mf.mo_coeff
+nmo = orbs[0].shape[0]
+eri_aaaa = pyscf.ao2mo.restore(4,pyscf.ao2mo.incore.general(mf._eri, (orbs[0],orbs[0],orbs[0],orbs[0]), compact=False),nmo)
+eri_bbbb = pyscf.ao2mo.restore(4,pyscf.ao2mo.incore.general(mf._eri, (orbs[1],orbs[1],orbs[1],orbs[1]), compact=False),nmo)
+eri_aabb = pyscf.ao2mo.restore(4,pyscf.ao2mo.incore.general(mf._eri, (orbs[0],orbs[0],orbs[1],orbs[1]), compact=False),nmo)
+h_core = mf.get_hcore(mol)
+h_aa = reduce(numpy.dot, (orbs[0].T, h_core, orbs[0]))
+h_bb = reduce(numpy.dot, (orbs[1].T, h_core, orbs[1]))
+nuc = mol.energy_nuc()
+float_format = '% 0.20E'
+if mol.symmetry:
+        groupname = mol.groupname
+        if groupname in ('SO3', 'Dooh'):
+            logger.info(mol, 'Lower symmetry from %s to D2h', groupname)
+            raise RuntimeError('Lower symmetry from %s to D2h' % groupname)
+        elif groupname == 'Coov':
+            logger.info(mol, 'Lower symmetry from Coov to C2v')
+            raise RuntimeError('''Lower symmetry from Coov to C2v''')
+orbsym = pyscf.symm.label_orb_symm(mol,mol.irrep_name,mol.symm_orb,orbs[0])
+orbsym = numpy.array(orbsym)
+orbsym = [param.IRREP_ID_TABLE[groupname][i]+1 for i in orbsym]
+a_inds = [i+1 for i in range(orbs[0].shape[0])]
+b_inds = [i+1 for i in range(orbs[1].shape[1])]
+nelec = mol.nelec
+tol=1e-18
+with open('fort.55', 'w') as fout:
+        if not isinstance(nelec, (int, numpy.number)):
+            ms    = abs(nelec[0] - nelec[1])
+            nelec =     nelec[0]  + nelec[1]
+        else: ms=0
+        fout.write(f"{nmo:1d} {nelec:1d}\n")
+        if orbsym is not None and len(orbsym) > 0:
+            fout.write(f"{' '.join([str(x) for x in orbsym])}\n")
+        else:
+            fout.write(f"{' 1' * nmo}\n")
+        fout.write(' 150000\n')
+        output_format = float_format + ' %5d %5d %5d %5d\n'
+        #4-fold symmetry
+        kl = 0
+        for l in range(nmo):
+            for k in range(0, l+1):
+                ij = 0
+                for i in range(0, nmo):
+                    for j in range(0, i+1):
+                        if i >= k:
+                            if abs(eri_aaaa[ij,kl]) > tol:
+                                fout.write(output_format % (eri_aaaa[ij,kl], a_inds[i], a_inds[j], a_inds[k], a_inds[l]))
+                        ij += 1
+                kl += 1
+        fout.write(' 0.00000000000000000000E+00' + '     0     0     0     0\n')
+        kl = 0
+        for l in range(nmo):
+            for k in range(0, l+1):
+                ij = 0
+                for i in range(0, nmo):
+                    for j in range(0, i+1):
+                        if i >= k:
+                            if abs(eri_bbbb[ij,kl]) > tol:
+                                fout.write(output_format % (eri_bbbb[ij,kl], b_inds[i], b_inds[j], b_inds[k], b_inds[l]))
+                        ij += 1
+                kl += 1
+        fout.write(' 0.00000000000000000000E+00' + '     0     0     0     0\n')
+        ij = 0
+        for j in range(nmo):
+            for i in range(0, j+1):
+                kl = 0
+                for k in range(nmo):
+                    for l in range(0, k+1):
+                        if abs(eri_aabb[ij,kl]) > tol:
+                            fout.write(output_format % (eri_aabb[ij,kl], a_inds[i], a_inds[j], b_inds[k], b_inds[l]))
+                        kl += 1
+                ij +=1
+
+        fout.write(' 0.00000000000000000000E+00' + '     0     0     0     0\n')
+        h_aa = h_aa.reshape(nmo,nmo)
+        h_bb = h_bb.reshape(nmo,nmo)
+        output_format = float_format + ' %5d %5d     0     0\n'
+        for i in range(nmo):
+            for j in range(nmo):
+                fout.write(output_format % (h_aa[i,j], a_inds[i], a_inds[j]))
+        fout.write(' 0.00000000000000000000E+00' + '     0     0     0     0\n')
+        for i in range(nmo):
+            for j in range(nmo):
+                fout.write(output_format % (h_bb[i,j], b_inds[i], b_inds[j]))
+        fout.write(' 0.00000000000000000000E+00' + '     0     0     0     0\n')
+        output_format = float_format + '     0     0     0     0\n'
+        fout.write(output_format % nuc)
+#INFO: ******************** input file end ********************
+
+
+System: uname_result(system='Darwin', node='Mhrzzs-MacBook-Air.local', release='24.1.0', version='Darwin Kernel Version 24.1.0: Thu Oct 10 21:02:45 PDT 2024; root:xnu-11215.41.3~2/RELEASE_ARM64_T8112', machine='arm64')  Threads 1
+Python 3.11.10 (main, Sep  7 2024, 01:03:31) [Clang 16.0.0 (clang-1600.0.26.3)]
+numpy 2.1.1  scipy 1.14.1  h5py 3.11.0
+Date: Sat Nov  9 14:27:52 2024
+PySCF version 2.6.2
+PySCF path  /Users/jmhrzz/HPQC/PySCF/pyscf-test/lib/python3.11/site-packages/pyscf
+
+[CONFIG] ARGPARSE = False
+[CONFIG] DEBUG = False
+[CONFIG] MAX_MEMORY = 4000
+[CONFIG] TMPDIR = /var/folders/sv/p893skhd53z1sh_0fgwlc_0w0000gn/T
+[CONFIG] UNIT = angstrom
+[CONFIG] VERBOSE = 3
+[CONFIG] conf_file = None
+[INPUT] verbose = 9
+[INPUT] max_memory = 4000 
+[INPUT] num. atoms = 1
+[INPUT] num. electrons = 3
+[INPUT] charge = 1
+[INPUT] spin (= nelec alpha-beta = 2S) = 1
+[INPUT] symmetry True subgroup D2h
+[INPUT] Mole.unit = angstrom
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 Be     0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT] ---------------- BASIS SET ---------------- 
+[INPUT] l, kappa, [nprim/nctr], expnt,             c_1 c_2 ...
+[INPUT] Be
+[INPUT] 0    0    [5    /1   ]  1264.58569        0.00194475759
+                                189.936806        0.014835052
+                                43.159089         0.07209054629
+                                12.0986627        0.23715415
+                                3.196463098       0.4691986519
+[INPUT] 0    0    [2    /1   ]  0.7478133038      -0.2295064079
+                                0.2199663302      1.186916764
+[INPUT] 0    0    [1    /1   ]  0.0823099007         1
+[INPUT] 1    0    [3    /1   ]  3.196463098       0.0559801998
+                                0.7478133038      0.261550611
+                                0.2199663302      0.7939723389
+[INPUT] 1    0    [1    /1   ]  0.0823099007         1
+
+nuclear repulsion = 0
+point group symmetry = SO3, use subgroup D2h
+symmetry origin: [0. 0. 0.]
+symmetry axis x: [1. 0. 0.]
+symmetry axis y: [0. 1. 0.]
+symmetry axis z: [0. 0. 1.]
+num. orbitals of irrep Ag = 3
+num. orbitals of irrep B1u = 2
+num. orbitals of irrep B2u = 2
+num. orbitals of irrep B3u = 2
+number of shells = 5
+number of NR pGTOs = 20
+number of NR cGTOs = 9
+basis = {'BE': [[0, [1264.58569, 0.00194475759], [189.936806, 0.014835052], [43.159089, 0.07209054629], [12.0986627, 0.23715415], [3.196463098, 0.4691986519]], [0, [0.7478133038, -0.2295064079], [0.2199663302, 1.186916764]], [0, [0.0823099007, 1.0]], [1, [3.196463098, 0.0559801998], [0.7478133038, 0.261550611], [0.2199663302, 0.7939723389]], [1, [0.0823099007, 1.0]]]}
+ecp = {}
+bas 0, expnt(s) = [1264.58569    189.936806    43.159089    12.0986627    3.1964631]
+bas 1, expnt(s) = [0.7478133  0.21996633]
+bas 2, expnt(s) = [0.0823099]
+bas 3, expnt(s) = [3.1964631  0.7478133  0.21996633]
+bas 4, expnt(s) = [0.0823099]
+CPU time:         0.26
+arg.atm = [[ 4 20  1 23  0  0]]
+arg.bas = [[ 0  0  5  1  0 24 29  0]
+ [ 0  0  2  1  0 34 36  0]
+ [ 0  0  1  1  0 38 39  0]
+ [ 0  1  3  1  0 40 43  0]
+ [ 0  1  1  1  0 46 47  0]]
+arg.env = [ 0.00000000e+00  0.00000000e+00  0.00000000e+00  0.00000000e+00
+  0.00000000e+00  0.00000000e+00  0.00000000e+00  0.00000000e+00
+  0.00000000e+00  0.00000000e+00  0.00000000e+00  0.00000000e+00
+  0.00000000e+00  0.00000000e+00  0.00000000e+00  0.00000000e+00
+  0.00000000e+00  0.00000000e+00  0.00000000e+00  0.00000000e+00
+  0.00000000e+00  0.00000000e+00  0.00000000e+00  0.00000000e+00
+  1.26458569e+03  1.89936806e+02  4.31590890e+01  1.20986627e+01
+  3.19646310e+00  1.47218486e+00  2.70945283e+00  4.33329437e+00
+  5.49185965e+00  4.00400583e+00  7.47813304e-01  2.19966330e-01
+ -4.56491059e-01  9.42931167e-01  8.23099007e-02  3.88243401e-01
+  3.19646310e+00  7.47813304e-01  2.19966330e-01  6.98000856e-01
+  5.30617556e-01  3.48927362e-01  8.23099007e-02  1.28617330e-01]
+ecpbas  = []
+
+
+******** <class 'pyscf.scf.uhf_symm.SymAdaptedUHF'> ********
+method = SymAdaptedUHF
+initial guess = atom
+damping factor = 0
+level_shift factor = 0
+DIIS = <class 'pyscf.scf.diis.CDIIS'>
+diis_start_cycle = 1
+diis_space = 8
+diis_damp = 0
+SCF conv_tol = 1e-10
+SCF conv_tol_grad = None
+SCF ddm_tol = 1e-14
+SCF max_cycles = 999
+direct_scf = True
+direct_scf_tol = 1e-13
+chkfile to save SCF result = out.chk
+max_memory 4000 MB (current use 0 MB)
+number electrons alpha = 2  beta = 1
+irrep_nelec {'Ag': 3}
+Freeze 3 electrons in irreps ['Ag']
+    0 free electrons in irreps B1u B2u B3u
+cond(S) = 15.329084901796756
+Set gradient conv threshold to 1e-05
+Spherically averaged atomic HF for {'Be'}
+
+
+******** <class 'pyscf.scf.atom_hf.AtomSphAverageRHF'> ********
+method = AtomSphAverageRHF
+initial guess = minao
+damping factor = 0
+level_shift factor = 0
+DIIS = <class 'pyscf.scf.diis.CDIIS'>
+diis_start_cycle = 1
+diis_space = 8
+diis_damp = 0
+SCF conv_tol = 1e-09
+SCF conv_tol_grad = None
+SCF ddm_tol = 1e-10
+SCF max_cycles = 50
+direct_scf = True
+direct_scf_tol = 1e-13
+chkfile to save SCF result = /var/folders/sv/p893skhd53z1sh_0fgwlc_0w0000gn/T/tmpvg063ypd
+max_memory 4000 MB (current use 0 MB)
+atom = Be
+Set gradient conv threshold to 3.16228e-05
+Initial guess from minao.
+Nelec from initial guess = 3.9439157239296994
+E1 = -18.650127810929238  E_coul = 4.814876637876633
+init E= -13.8352511730526
+l = 0  e_0 = -4.31708483
+l = 0  e_1 = -0.299280187
+l = 0  e_2 = 0.376208384
+l = 1  e_0 = 0.0659274329
+l = 1  e_1 = 0.450943187
+    CPU time for initialize scf      0.01 sec, wall time      0.01 sec
+l = 0  e_0 = -4.31708483
+l = 0  e_1 = -0.299280187
+l = 0  e_2 = 0.376208384
+l = 1  e_0 = 0.0659274329
+l = 1  e_1 = 0.450943187
+l = 0  occ = 2 + 0
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -19.0054364387863  E_coul = 4.958494175208059
+cycle= 1 E= -14.0469422635782  delta_E= -0.212  |g|=    0  |ddm|= 0.208
+    CPU time for cycle= 1      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0.0448786
+diis-c [-0.00201409  1.        ]
+l = 0  e_0 = -4.26695372
+l = 0  e_1 = -0.277568733
+l = 0  e_2 = 0.397545843
+l = 1  e_0 = 0.0813074153
+l = 1  e_1 = 0.474543078
+l = 0  occ = 2 + 0
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -18.96356303107131  E_coul = 4.915899367647237
+cycle= 2 E= -14.0476636634241  delta_E= -0.000721  |g|=    0  |ddm|= 0.184
+    CPU time for cycle= 2      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0.0085856
+diis-c [-2.90117064e-05 -1.76555379e-01  1.17655538e+00]
+l = 0  e_0 = -4.28819922
+l = 0  e_1 = -0.281472917
+l = 0  e_2 = 0.394613362
+l = 1  e_0 = 0.0765124892
+l = 1  e_1 = 0.466836798
+l = 0  occ = 2 + 0
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -18.953277908856116  E_coul = 4.905579540832451
+cycle= 3 E= -14.0476983680237  delta_E= -3.47e-05  |g|=    0  |ddm|= 0.0482
+    CPU time for cycle= 3      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0.000855035
+diis-c [-1.14531980e-10  2.06837606e-02 -1.93537393e-01  1.17285363e+00]
+l = 0  e_0 = -4.2897472
+l = 0  e_1 = -0.281762552
+l = 0  e_2 = 0.39433009
+l = 1  e_0 = 0.0760984372
+l = 1  e_1 = 0.466209814
+l = 0  occ = 2 + 0
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -18.952375685743725  E_coul = 4.904677055622833
+cycle= 4 E= -14.0476986301209  delta_E= -2.62e-07  |g|=    0  |ddm|= 0.00442
+    CPU time for cycle= 4      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=6.06105e-07
+diis-c [-3.72298748e-19 -2.55413084e-07 -7.66361852e-05  8.45508258e-05
+  9.99992341e-01]
+l = 0  e_0 = -4.28974673
+l = 0  e_1 = -0.281764459
+l = 0  e_2 = 0.394332336
+l = 1  e_0 = 0.0760984008
+l = 1  e_1 = 0.466210295
+l = 0  occ = 2 + 0
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -18.95237488850811  E_coul = 4.904676258387044
+cycle= 5 E= -14.0476986301211  delta_E= -1.76e-13  |g|=    0  |ddm|= 3.76e-06
+    CPU time for cycle= 5      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.4215e-10
+Linear dependence found in DIIS error vectors.
+diis-c [-1.41123821e-15 -1.23384288e-07 -3.83473755e-05  4.24816790e-05
+  4.99999919e-01  4.99996070e-01]
+l = 0  e_0 = -4.28974673
+l = 0  e_1 = -0.281764458
+l = 0  e_2 = 0.394332336
+l = 1  e_0 = 0.0760984008
+l = 1  e_1 = 0.466210294
+l = 0  occ = 2 + 0
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -18.952374888601426  E_coul = 4.904676258480358
+cycle= 6 E= -14.0476986301211  delta_E= -1.78e-15  |g|=    0  |ddm|= 4.36e-10
+    CPU time for cycle= 6      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=7.09327e-11
+Linear dependence found in DIIS error vectors.
+diis-c [-1.08925727e-15 -8.03783107e-08 -2.55787467e-05  2.84146957e-05
+  3.33334123e-01  3.33331556e-01  3.33331566e-01]
+l = 0  e_0 = -4.28974673
+l = 0  e_1 = -0.281764458
+l = 0  e_2 = 0.394332336
+l = 1  e_0 = 0.0760984008
+l = 1  e_1 = 0.466210294
+l = 0  occ = 2 + 0
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -18.952374888632477  E_coul = 4.904676258511412
+cycle= 7 E= -14.0476986301211  delta_E= 3.55e-15  |g|=    0  |ddm|= 1.45e-10
+    CPU time for cycle= 7      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=4.72305e-11
+Linear dependence found in DIIS error vectors.
+diis-c [-1.06607567e-15 -4.74781419e-08 -1.93019899e-05  2.20306032e-05
+  2.50000770e-01  2.49998845e-01  2.49998851e-01  2.49998853e-01]
+l = 0  e_0 = -4.28974673
+l = 0  e_1 = -0.281764458
+l = 0  e_2 = 0.394332335
+l = 1  e_0 = 0.0760984008
+l = 1  e_1 = 0.466210294
+l = 0  occ = 2 + 0
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -18.95237488864844  E_coul = 4.9046762585273775
+cycle= 8 E= -14.0476986301211  delta_E= 3.55e-15  |g|=    0  |ddm|= 7.46e-11
+    CPU time for cycle= 8      0.00 sec, wall time      0.00 sec
+l = 0  e_0 = -4.28974673
+l = 0  e_1 = -0.281764458
+l = 0  e_2 = 0.394332335
+l = 1  e_0 = 0.0760984008
+l = 1  e_1 = 0.466210294
+l = 0  occ = 2 + 0
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -18.952374888684545  E_coul = 4.904676258563481
+Extra cycle  E= -14.0476986301211  delta_E= -3.55e-15  |g|=    0  |ddm|= 7.46e-11
+    CPU time for scf_cycle      0.01 sec, wall time      0.01 sec
+    CPU time for SCF      0.01 sec, wall time      0.01 sec
+Atomic HF for atom  Be  converged. SCF energy = -14.0476986301211
+
+Atom Be, E = -14.0476986301
+Nelec from initial guess = (np.float64(2.0000000000000004), np.float64(2.0000000000000004))
+E1 = -18.952374888684545  Ecoul = 4.904676258563482
+init E= -14.0476986301211
+    CPU time for initialize scf      0.01 sec, wall time      0.01 sec
+alpha HOMO (Ag) = -0.281764458151942  LUMO (B1u) = 0.0760984007585003
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.281764458151942  LUMO = 0.394332335284068
+   mo_energy = [-4.28974673 -0.28176446  0.39433234]
+alpha-B1u nocc = 0
+   mo_energy = [0.0760984  0.46621029]
+alpha-B2u nocc = 0
+   mo_energy = [0.0760984  0.46621029]
+alpha-B3u nocc = 0
+   mo_energy = [0.0760984  0.46621029]
+beta-Ag nocc = 1  HOMO = -4.28974672762685  LUMO = -0.281764458151942
+
+WARN: beta-Ag LUMO -0.281764458151942 < system HOMO -0.281764458151942
+
+   mo_energy = [-4.28974673 -0.28176446  0.39433234]
+beta-B1u nocc = 0
+   mo_energy = [0.0760984  0.46621029]
+beta-B2u nocc = 0
+   mo_energy = [0.0760984  0.46621029]
+beta-B3u nocc = 0
+   mo_energy = [0.0760984  0.46621029]
+multiplicity <S^2> = 0.75  2S+1 = 2
+E1 = -17.344174775813784  Ecoul = 3.57824060384406
+cycle= 1 E= -13.7659341719697  delta_E= 0.282  |g|= 0.0782  |ddm|= 0.953
+    CPU time for cycle= 1      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0.110566
+diis-c [-0.01222477  1.        ]
+alpha HOMO (Ag) = -0.636280557431479  LUMO (B1u) = -0.242541292839589
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.636280557431479  LUMO = 0.091260372809551
+   mo_energy = [-4.80738256 -0.63628056  0.09126037]
+alpha-B1u nocc = 0
+   mo_energy = [-0.24254129  0.13666382]
+alpha-B2u nocc = 0
+   mo_energy = [-0.24254129  0.13666382]
+alpha-B3u nocc = 0
+   mo_energy = [-0.24254129  0.13666382]
+beta-Ag nocc = 1  HOMO = -4.75212685427742  LUMO = -0.281764458151344
+   mo_energy = [-4.75212685 -0.28176446  0.13709912]
+beta-B1u nocc = 0
+   mo_energy = [-0.17190882  0.15859987]
+beta-B2u nocc = 0
+   mo_energy = [-0.17190882  0.15859987]
+beta-B3u nocc = 0
+   mo_energy = [-0.17190882  0.15859987]
+multiplicity <S^2> = 0.75000896  2S+1 = 2.000009
+E1 = -17.443189468617128  Ecoul = 3.6663178522630977
+cycle= 2 E= -13.776871616354  delta_E= -0.0109  |g|= 0.0274  |ddm|= 0.419
+    CPU time for cycle= 2      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0.0387337
+diis-c [-2.44272070e-04 -4.78828531e-01  1.47882853e+00]
+alpha HOMO (Ag) = -0.642572502178043  LUMO (B1u) = -0.224269653985821
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.642572502178043  LUMO = 0.0976165658983379
+   mo_energy = [-4.75174653 -0.6425725   0.09761657]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22426965  0.15397707]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22426965  0.15397707]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22426965  0.15397707]
+beta-Ag nocc = 1  HOMO = -4.67757199153387  LUMO = -0.259335980151551
+   mo_energy = [-4.67757199 -0.25933598  0.15709894]
+beta-B1u nocc = 0
+   mo_energy = [-0.15362532  0.18250591]
+beta-B2u nocc = 0
+   mo_energy = [-0.15362532  0.18250591]
+beta-B3u nocc = 0
+   mo_energy = [-0.15362532  0.18250591]
+multiplicity <S^2> = 0.75001671  2S+1 = 2.0000167
+E1 = -17.48513414888445  Ecoul = 3.706740243544747
+cycle= 3 E= -13.7783939053397  delta_E= -0.00152  |g|= 0.0016  |ddm|= 0.221
+    CPU time for cycle= 3      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0.00226743
+diis-c [-1.28870714e-07  4.20835542e-02 -1.72379316e-01  1.13029576e+00]
+alpha HOMO (Ag) = -0.640572411492003  LUMO (B2u) = -0.223702374133172
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640572411492003  LUMO = 0.0954217664439116
+   mo_energy = [-4.7523925  -0.64057241  0.09542177]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22370237  0.15374864]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22370237  0.15374864]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22370237  0.15374864]
+beta-Ag nocc = 1  HOMO = -4.67699100202245  LUMO = -0.25913475380882
+   mo_energy = [-4.676991   -0.25913475  0.15736553]
+beta-B1u nocc = 0
+   mo_energy = [-0.15354343  0.18269855]
+beta-B2u nocc = 0
+   mo_energy = [-0.15354343  0.18269855]
+beta-B3u nocc = 0
+   mo_energy = [-0.15354343  0.18269855]
+multiplicity <S^2> = 0.75001714  2S+1 = 2.0000171
+E1 = -17.486841330979708  Ecoul = 3.7084439359953
+cycle= 4 E= -13.7783973949844  delta_E= -3.49e-06  |g|= 4.28e-05  |ddm|= 0.0109
+    CPU time for cycle= 4      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=6.05931e-05
+diis-c [-6.54085315e-10 -6.14208367e-03  2.63681628e-02 -1.85919459e-01
+  1.16569338e+00]
+alpha HOMO (Ag) = -0.640735980873956  LUMO (B2u) = -0.223696271595848
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640735980873956  LUMO = 0.095581817503358
+   mo_energy = [-4.7523643  -0.64073598  0.09558182]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369627  0.15379775]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369627  0.15379775]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369627  0.15379775]
+beta-Ag nocc = 1  HOMO = -4.67686710618501  LUMO = -0.259092932395307
+   mo_energy = [-4.67686711 -0.25909293  0.15740055]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351029  0.18273321]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351029  0.18273321]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351029  0.18273321]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681755405421  Ecoul = 3.7084201583841017
+cycle= 5 E= -13.7783973956701  delta_E= -6.86e-10  |g|= 1.17e-06  |ddm|= 9.42e-05
+    CPU time for cycle= 5      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.65969e-06
+diis-c [-4.86201172e-14  2.95018823e-05 -1.56854101e-04  1.93150495e-03
+  2.05006117e-05  9.98175347e-01]
+alpha HOMO (Ag) = -0.640716269087806  LUMO (B1u) = -0.223698315343175
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716269087806  LUMO = 0.0955619898975514
+   mo_energy = [-4.75237713 -0.64071627  0.09556199]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369832  0.15379071]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369832  0.15379071]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369832  0.15379071]
+beta-Ag nocc = 1  HOMO = -4.67688425210399  LUMO = -0.259099334655626
+   mo_energy = [-4.67688425 -0.25909933  0.15739506]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351568  0.18272693]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351568  0.18272693]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351568  0.18272693]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817174042823  Ecoul = 3.7084197783720327
+cycle= 6 E= -13.7783973956708  delta_E= -6.82e-13  |g|= 1.16e-08  |ddm|= 3.71e-06
+    CPU time for cycle= 6      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.63786e-08
+diis-c [-5.22788778e-20 -7.65690003e-08  2.14014601e-06 -6.32701280e-05
+ -3.90756864e-04 -5.53519964e-02  1.05580396e+00]
+alpha HOMO (Ag) = -0.64071633995672  LUMO (B2u) = -0.223698309729289
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.64071633995672  LUMO = 0.095562060538987
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418997656  LUMO = -0.25909931348048
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171194218  Ecoul = 3.7084197755234314
+cycle= 7 E= -13.7783973956708  delta_E= 3.55e-15  |g|= 6.03e-11  |ddm|= 9.42e-09
+    CPU time for cycle= 7      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=8.53067e-11
+Linear dependence found in DIIS error vectors.
+diis-c [-1.40387918e-15  2.33072827e-08  6.83365787e-07 -2.55962238e-05
+ -1.82550967e-04 -2.37337546e-02  4.97447451e-01  5.26493744e-01]
+alpha HOMO (Ag) = -0.640716340414736  LUMO (B2u) = -0.223698309690659
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716340414736  LUMO = 0.0955620609972894
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418966724  LUMO = -0.25909931333905
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717119494  Ecoul = 3.70841977552415
+cycle= 8 E= -13.7783973956708  delta_E= -3.55e-15  |g|= 4.95e-11  |ddm|= 3.37e-11
+    CPU time for cycle= 8      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=7.00697e-11
+Linear dependence found in DIIS error vectors.
+diis-c [-8.28384670e-16 -3.25285854e-10  5.31805177e-07 -1.78272033e-05
+ -1.19940014e-04 -1.61024797e-02  3.26048822e-01  3.45112677e-01
+  3.45078217e-01]
+alpha HOMO (Ag) = -0.640716340682644  LUMO (B1u) = -0.223698309669138
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716340682644  LUMO = 0.0955620612647265
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418946075  LUMO = -0.259099313258038
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171189056  Ecoul = 3.7084197755182675
+cycle= 9 E= -13.7783973956708  delta_E= 1.78e-15  |g|= 2.72e-11  |ddm|= 1.7e-11
+    CPU time for cycle= 9      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=3.84419e-11
+Linear dependence found in DIIS error vectors.
+diis-c [-3.33066907e-16  2.54720383e-01  1.76337012e-07 -5.96374509e-06
+ -5.97247750e-05 -5.20403924e-03  2.41122152e-01  2.54726481e-01
+  2.54700535e-01]
+alpha HOMO (Ag) = -0.640716340948818  LUMO (B2u) = -0.223698309641676
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716340948818  LUMO = 0.0955620615326566
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418925419  LUMO = -0.259099313171176
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171194822  Ecoul = 3.708419775524031
+cycle= 10 E= -13.7783973956708  delta_E= -1.78e-15  |g|= 7.49e-11  |ddm|= 6.06e-11
+    CPU time for cycle= 10      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.05873e-10
+Linear dependence found in DIIS error vectors.
+diis-c [-9.49990265e-16  2.00670752e-01  2.00655528e-01 -1.04444202e-06
+ -4.74605005e-05 -1.51147528e-03  1.98886139e-01  2.00678038e-01
+  2.00669523e-01]
+alpha HOMO (Ag) = -0.640716341081237  LUMO (B1u) = -0.223698309555584
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341081237  LUMO = 0.0955620616693876
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418882699  LUMO = -0.259099313048464
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171356776  Ecoul = 3.7084197756859907
+cycle= 11 E= -13.7783973956708  delta_E= 5.33e-15  |g|= 1.44e-10  |ddm|= 8.88e-10
+    CPU time for cycle= 11      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.04199e-10
+Linear dependence found in DIIS error vectors.
+diis-c [-5.55111512e-17  1.66699782e-01  1.66695419e-01  1.66687037e-01
+ -2.92740399e-05 -8.30837548e-05  1.66625920e-01  1.66703728e-01
+  1.66700473e-01]
+alpha HOMO (Ag) = -0.64071634107931  LUMO (B1u) = -0.223698309677161
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.64071634107931  LUMO = 0.0955620616677577
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418931704  LUMO = -0.259099313182033
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171088184  Ecoul = 3.708419775417399
+cycle= 12 E= -13.7783973956708  delta_E=    0  |g|= 1.12e-10  |ddm|= 1.51e-09
+    CPU time for cycle= 12      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.57962e-10
+Linear dependence found in DIIS error vectors.
+diis-c [1.97667100e-16 1.42723229e-01 1.42719691e-01 1.42714701e-01
+ 1.42725099e-01 5.02800262e-04 1.43162310e-01 1.42727388e-01
+ 1.42724781e-01]
+alpha HOMO (Ag) = -0.640716341075761  LUMO (B2u) = -0.223698309550294
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341075761  LUMO = 0.0955620616698658
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418891177  LUMO = -0.259099313045315
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717138029  Ecoul = 3.708419775709502
+cycle= 13 E= -13.7783973956708  delta_E= -5.33e-15  |g|= 1.65e-10  |ddm|= 1.62e-09
+    CPU time for cycle= 13      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.33988e-10
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341069549  LUMO (B1u) = -0.223698309599542
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341069549  LUMO = 0.0955620616730788
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418908358  LUMO = -0.259099313100818
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171272442  Ecoul = 3.7084197756016533
+cycle= 14 E= -13.7783973956708  delta_E= 1.78e-15  |g|= 1.5e-10  |ddm|= 6.83e-10
+    CPU time for cycle= 14      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.11941e-10
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083287  LUMO (B1u) = -0.223698309630132
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083287  LUMO = 0.0955620616657197
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418913984  LUMO = -0.25909931312926
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171197366  Ecoul = 3.70841977552658
+cycle= 15 E= -13.7783973956708  delta_E= 1.78e-15  |g|= 1.08e-11  |ddm|= 3e-10
+    CPU time for cycle= 15      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.53186e-11
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083396  LUMO (B1u) = -0.22369830962984
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083396  LUMO = 0.0955620616656622
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418913868  LUMO = -0.259099313128906
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171197977  Ecoul = 3.7084197755271897
+cycle= 16 E= -13.7783973956708  delta_E=    0  |g|= 1.1e-11  |ddm|= 4.6e-12
+    CPU time for cycle= 16      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.55013e-11
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083476  LUMO (B1u) = -0.22369830962963
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083476  LUMO = 0.0955620616656213
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418913773  LUMO = -0.259099313128651
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171198414  Ecoul = 3.7084197755276227
+cycle= 17 E= -13.7783973956708  delta_E= -3.55e-15  |g|= 1.11e-11  |ddm|= 3.25e-12
+    CPU time for cycle= 17      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.56588e-11
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083521  LUMO (B1u) = -0.223698309629364
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083521  LUMO = 0.095562061665597
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418913667  LUMO = -0.259099313128346
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717119899  Ecoul = 3.7084197755281982
+cycle= 18 E= -13.7783973956708  delta_E=    0  |g|= 1.14e-11  |ddm|= 3.71e-12
+    CPU time for cycle= 18      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.60811e-11
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083537  LUMO (B1u) = -0.223698309629283
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083537  LUMO = 0.0955620616655876
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418913624  LUMO = -0.25909931312825
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717119918  Ecoul = 3.7084197755283923
+cycle= 19 E= -13.7783973956708  delta_E= 1.78e-15  |g|= 1.14e-11  |ddm|= 1.12e-12
+    CPU time for cycle= 19      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.60724e-11
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083513  LUMO (B2u) = -0.22369830963229
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083513  LUMO = 0.0955620616656025
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418914782  LUMO = -0.259099313131543
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717119252  Ecoul = 3.7084197755217394
+cycle= 20 E= -13.7783973956708  delta_E= 8.88e-15  |g|= 7.48e-12  |ddm|= 3.79e-11
+    CPU time for cycle= 20      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.05796e-11
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083582  LUMO (B2u) = -0.223698309630208
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083582  LUMO = 0.0955620616655657
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418913994  LUMO = -0.259099313129246
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171197192  Ecoul = 3.708419775526404
+cycle= 21 E= -13.7783973956708  delta_E= -7.11e-15  |g|= 1e-11  |ddm|= 2.69e-11
+    CPU time for cycle= 21      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.41726e-11
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083669  LUMO (B2u) = -0.223698309633578
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083669  LUMO = 0.0955620616655183
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.6768841891517  LUMO = -0.259099313132889
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171189575  Ecoul = 3.708419775518788
+cycle= 22 E= -13.7783973956708  delta_E=    0  |g|= 5.15e-12  |ddm|= 4.23e-11
+    CPU time for cycle= 22      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=7.28823e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083887  LUMO (B2u) = -0.223698309634778
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083887  LUMO = 0.0955620616653994
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418915523  LUMO = -0.259099313134121
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717118675  Ecoul = 3.7084197755159614
+cycle= 23 E= -13.7783973956708  delta_E= -1.78e-15  |g|= 3.16e-12  |ddm|= 1.39e-11
+    CPU time for cycle= 23      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=4.46583e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083894  LUMO (B2u) = -0.223698309634967
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083894  LUMO = 0.0955620616653964
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.6768841891559  LUMO = -0.259099313134325
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171186317  Ecoul = 3.7084197755155293
+cycle= 24 E= -13.7783973956708  delta_E= 1.78e-15  |g|= 2.89e-12  |ddm|= 2.35e-12
+    CPU time for cycle= 24      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=4.08289e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083899  LUMO (B2u) = -0.223698309635179
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083899  LUMO = 0.0955620616653935
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418915667  LUMO = -0.259099313134555
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171185837  Ecoul = 3.708419775515054
+cycle= 25 E= -13.7783973956708  delta_E= 3.55e-15  |g|= 2.58e-12  |ddm|= 2.66e-12
+    CPU time for cycle= 25      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=3.64854e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083902  LUMO (B1u) = -0.223698309635412
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083902  LUMO = 0.0955620616653908
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418915751  LUMO = -0.259099313134808
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171185315  Ecoul = 3.7084197755145283
+cycle= 26 E= -13.7783973956708  delta_E= -3.55e-15  |g|= 2.24e-12  |ddm|= 2.92e-12
+    CPU time for cycle= 26      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=3.16858e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083905  LUMO (B1u) = -0.223698309635667
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083905  LUMO = 0.0955620616653912
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418915845  LUMO = -0.259099313135086
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717118474  Ecoul = 3.7084197755139554
+cycle= 27 E= -13.7783973956708  delta_E= 3.55e-15  |g|= 1.87e-12  |ddm|= 3.22e-12
+    CPU time for cycle= 27      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.64008e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083907  LUMO (B2u) = -0.223698309635938
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083907  LUMO = 0.0955620616653885
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418915943  LUMO = -0.25909931313538
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171184146  Ecoul = 3.708419775513354
+cycle= 28 E= -13.7783973956708  delta_E= -8.88e-15  |g|= 1.47e-12  |ddm|= 3.4e-12
+    CPU time for cycle= 28      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.08157e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083911  LUMO (B1u) = -0.223698309636089
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083911  LUMO = 0.0955620616653862
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418915997  LUMO = -0.259099313135543
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717118379  Ecoul = 3.708419775513006
+cycle= 29 E= -13.7783973956708  delta_E= 7.11e-15  |g|= 1.26e-12  |ddm|= 1.89e-12
+    CPU time for cycle= 29      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.77476e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083914  LUMO (B2u) = -0.223698309636339
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083914  LUMO = 0.0955620616653857
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916088  LUMO = -0.259099313135816
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717118323  Ecoul = 3.708419775512444
+cycle= 30 E= -13.7783973956708  delta_E=    0  |g|= 8.9e-13  |ddm|= 3.16e-12
+    CPU time for cycle= 30      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.25809e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083917  LUMO (B2u) = -0.223698309636455
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083917  LUMO = 0.095562061665384
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916129  LUMO = -0.259099313135941
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171182974  Ecoul = 3.7084197755121853
+cycle= 31 E= -13.7783973956708  delta_E= -3.55e-15  |g|= 7.26e-13  |ddm|= 1.44e-12
+    CPU time for cycle= 31      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.02613e-12
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083916  LUMO (B1u) = -0.223698309636527
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083916  LUMO = 0.0955620616653848
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916157  LUMO = -0.25909931313602
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171182814  Ecoul = 3.7084197755120245
+cycle= 32 E= -13.7783973956708  delta_E= -1.78e-15  |g|= 6.18e-13  |ddm|= 9.2e-13
+    CPU time for cycle= 32      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=8.7366e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083915  LUMO (B2u) = -0.223698309636595
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083915  LUMO = 0.0955620616653839
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916182  LUMO = -0.259099313136094
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717118266  Ecoul = 3.7084197755118713
+cycle= 33 E= -13.7783973956708  delta_E=    0  |g|= 5.17e-13  |ddm|= 8.59e-13
+    CPU time for cycle= 33      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=7.31623e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083915  LUMO (B2u) = -0.223698309636656
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083915  LUMO = 0.0955620616653822
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916204  LUMO = -0.259099313136161
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717118252  Ecoul = 3.708419775511735
+cycle= 34 E= -13.7783973956708  delta_E= 7.11e-15  |g|= 4.26e-13  |ddm|= 7.78e-13
+    CPU time for cycle= 34      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=6.02101e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083914  LUMO (B1u) = -0.22369830963671
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083914  LUMO = 0.0955620616653835
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916225  LUMO = -0.25909931313622
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171182402  Ecoul = 3.7084197755116133
+cycle= 35 E= -13.7783973956708  delta_E= -5.33e-15  |g|= 3.45e-13  |ddm|= 6.88e-13
+    CPU time for cycle= 35      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=4.87835e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083914  LUMO (B2u) = -0.223698309636755
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083914  LUMO = 0.0955620616653845
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916241  LUMO = -0.259099313136269
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171182302  Ecoul = 3.708419775511514
+cycle= 36 E= -13.7783973956708  delta_E=    0  |g|= 2.77e-13  |ddm|= 5.75e-13
+    CPU time for cycle= 36      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=3.92429e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083913  LUMO (B2u) = -0.22369830963679
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083913  LUMO = 0.0955620616653859
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916255  LUMO = -0.259099313136308
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717118222  Ecoul = 3.708419775511432
+cycle= 37 E= -13.7783973956708  delta_E=    0  |g|= 2.24e-13  |ddm|= 4.52e-13
+    CPU time for cycle= 37      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=3.16927e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083913  LUMO (B1u) = -0.223698309636821
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083913  LUMO = 0.0955620616653843
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916266  LUMO = -0.259099313136342
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171182157  Ecoul = 3.708419775511366
+cycle= 38 E= -13.7783973956708  delta_E= -1.78e-15  |g|= 1.78e-13  |ddm|= 3.89e-13
+    CPU time for cycle= 38      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.52251e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083912  LUMO (B1u) = -0.223698309636842
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083912  LUMO = 0.0955620616653857
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916274  LUMO = -0.259099313136364
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171182107  Ecoul = 3.7084197755113184
+cycle= 39 E= -13.7783973956708  delta_E= 1.78e-15  |g|= 1.47e-13  |ddm|= 2.68e-13
+    CPU time for cycle= 39      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.08304e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083912  LUMO (B2u) = -0.223698309636859
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083912  LUMO = 0.095562061665386
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.6768841891628  LUMO = -0.259099313136383
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171182068  Ecoul = 3.708419775511282
+cycle= 40 E= -13.7783973956708  delta_E= 1.78e-15  |g|= 1.21e-13  |ddm|= 2.16e-13
+    CPU time for cycle= 40      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.71103e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083912  LUMO (B2u) = -0.223698309636873
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083912  LUMO = 0.095562061665385
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916286  LUMO = -0.259099313136399
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717118204  Ecoul = 3.70841977551125
+cycle= 41 E= -13.7783973956708  delta_E= -3.55e-15  |g|= 9.9e-14  |ddm|= 1.87e-13
+    CPU time for cycle= 41      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.39444e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083912  LUMO (B1u) = -0.223698309636886
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083912  LUMO = 0.0955620616653847
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.6768841891629  LUMO = -0.259099313136412
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717118201  Ecoul = 3.7084197755112234
+cycle= 42 E= -13.7783973956708  delta_E= 3.55e-15  |g|= 8e-14  |ddm|= 1.56e-13
+    CPU time for cycle= 42      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.12955e-13
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083911  LUMO (B1u) = -0.223698309636896
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083911  LUMO = 0.0955620616653858
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916294  LUMO = -0.259099313136423
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717118199  Ecoul = 3.708419775511201
+cycle= 43 E= -13.7783973956708  delta_E= -1.78e-15  |g|= 6.49e-14  |ddm|= 1.28e-13
+    CPU time for cycle= 43      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=9.2196e-14
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.64071634108391  LUMO (B2u) = -0.223698309636904
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.64071634108391  LUMO = 0.0955620616653864
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916297  LUMO = -0.259099313136432
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171181965  Ecoul = 3.708419775511177
+cycle= 44 E= -13.7783973956708  delta_E= 1.78e-15  |g|= 5.27e-14  |ddm|= 1.08e-13
+    CPU time for cycle= 44      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=7.43213e-14
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083911  LUMO (B2u) = -0.22369830963691
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083911  LUMO = 0.095562061665386
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.676884189163  LUMO = -0.25909931313644
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171181954  Ecoul = 3.7084197755111665
+cycle= 45 E= -13.7783973956708  delta_E=    0  |g|= 4.27e-14  |ddm|= 8.17e-14
+    CPU time for cycle= 45      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=6.03418e-14
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083911  LUMO (B1u) = -0.223698309636915
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083911  LUMO = 0.0955620616653862
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916302  LUMO = -0.259099313136446
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171181947  Ecoul = 3.7084197755111568
+cycle= 46 E= -13.7783973956708  delta_E= -3.55e-15  |g|= 3.43e-14  |ddm|= 6.68e-14
+    CPU time for cycle= 46      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=4.89547e-14
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.64071634108391  LUMO (B2u) = -0.22369830963692
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.64071634108391  LUMO = 0.0955620616653853
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916303  LUMO = -0.25909931313645
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717118193  Ecoul = 3.708419775511144
+cycle= 47 E= -13.7783973956708  delta_E= 5.33e-15  |g|= 2.85e-14  |ddm|= 5.45e-14
+    CPU time for cycle= 47      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=3.98872e-14
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083911  LUMO (B1u) = -0.223698309636923
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083911  LUMO = 0.0955620616653848
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916304  LUMO = -0.259099313136454
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171181926  Ecoul = 3.708419775511137
+cycle= 48 E= -13.7783973956708  delta_E= -3.55e-15  |g|= 2.32e-14  |ddm|= 4.33e-14
+    CPU time for cycle= 48      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=3.24446e-14
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083911  LUMO (B1u) = -0.223698309636926
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083911  LUMO = 0.0955620616653861
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916306  LUMO = -0.259099313136457
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171181926  Ecoul = 3.7084197755111328
+cycle= 49 E= -13.7783973956708  delta_E= -5.33e-15  |g|= 1.81e-14  |ddm|= 3.55e-14
+    CPU time for cycle= 49      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.63826e-14
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083911  LUMO (B1u) = -0.223698309636928
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083911  LUMO = 0.0955620616653847
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916306  LUMO = -0.25909931313646
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.48681717118192  Ecoul = 3.7084197755111274
+cycle= 50 E= -13.7783973956708  delta_E= 3.55e-15  |g|= 1.52e-14  |ddm|= 2.8e-14
+    CPU time for cycle= 50      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=2.19777e-14
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.640716341083911  LUMO (B1u) = -0.22369830963693
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.640716341083911  LUMO = 0.0955620616653855
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916307  LUMO = -0.259099313136462
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171181908  Ecoul = 3.708419775511122
+cycle= 51 E= -13.7783973956708  delta_E= 3.55e-15  |g|= 1.27e-14  |ddm|= 2.51e-14
+    CPU time for cycle= 51      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.72036e-14
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.64071634108391  LUMO (B1u) = -0.223698309636932
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.64071634108391  LUMO = 0.0955620616653867
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916308  LUMO = -0.259099313136463
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171181904  Ecoul = 3.708419775511117
+cycle= 52 E= -13.7783973956708  delta_E=    0  |g|= 9.86e-15  |ddm|= 2.33e-14
+    CPU time for cycle= 52      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.36276e-14
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.64071634108391  LUMO (B2u) = -0.223698309636933
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.64071634108391  LUMO = 0.0955620616653858
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916308  LUMO = -0.259099313136465
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171181904  Ecoul = 3.708419775511115
+cycle= 53 E= -13.7783973956708  delta_E= -3.55e-15  |g|= 7.64e-15  |ddm|= 1.53e-14
+    CPU time for cycle= 53      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=1.13205e-14
+Linear dependence found in DIIS error vectors.
+diis-c [-2.77555756e-16  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01  1.25000000e-01  1.25000000e-01  1.25000000e-01
+  1.25000000e-01]
+alpha HOMO (Ag) = -0.64071634108391  LUMO (B1u) = -0.223698309636934
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.64071634108391  LUMO = 0.095562061665385
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916308  LUMO = -0.259099313136466
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.4868171711819  Ecoul = 3.708419775511114
+cycle= 54 E= -13.7783973956708  delta_E= 3.55e-15  |g|= 7.11e-15  |ddm|= 8.27e-15
+    CPU time for cycle= 54      0.00 sec, wall time      0.00 sec
+alpha HOMO (Ag) = -0.64071634108391  LUMO (B1u) = -0.223698309636937
+alpha irrep_nelec = [2, 0, 0, 0]
+beta  irrep_nelec = [1, 0, 0, 0]
+alpha-Ag nocc = 2  HOMO = -0.64071634108391  LUMO = 0.0955620616653885
+   mo_energy = [-4.75237709 -0.64071634  0.09556206]
+alpha-B1u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B2u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+alpha-B3u nocc = 0
+   mo_energy = [-0.22369831  0.15379073]
+beta-Ag nocc = 1  HOMO = -4.67688418916309  LUMO = -0.259099313136469
+   mo_energy = [-4.67688419 -0.25909931  0.15739508]
+beta-B1u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B2u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+beta-B3u nocc = 0
+   mo_energy = [-0.15351566  0.18272695]
+multiplicity <S^2> = 0.75001721  2S+1 = 2.0000172
+E1 = -17.486817171181897  Ecoul = 3.708419775511109
+Extra cycle  E= -13.7783973956708  delta_E= -1.78e-15  |g|= 2.45e-15  |ddm|= 8.27e-15
+    CPU time for scf_cycle      0.09 sec, wall time      0.09 sec
+    CPU time for SCF      0.09 sec, wall time      0.09 sec
+converged SCF energy = -13.7783973956708  <S^2> = 0.75001721  2S+1 = 2.0000172
+
+******** <class 'pyscf.cc.uccsd.UCCSD'> ********
+CC2 = 0
+CCSD nocc = (2, 1), nmo = (9, 9)
+max_cycle = 50
+direct = 0
+conv_tol = 1e-10
+conv_tol_normt = 1e-06
+diis_space = 6
+diis_start_cycle = 0
+diis_start_energy_diff = 1e+09
+max_memory 4000 MB (current use 0 MB)
+E1 = -17.486817171181897  Ecoul = 3.708419775511109
+Init t2, MP2 energy = -0.00113387667796494
+    CPU time for init mp2      0.00 sec, wall time      0.00 sec
+Init E_corr(UCCSD) = -0.00113387667796494
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:7]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:8]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:7]      0.00 sec, wall time      0.00 sec
+    CPU time for update t1 t2      0.00 sec, wall time      0.00 sec
+DIIS for step 0
+cycle = 1  E_corr(UCCSD) = -0.00119052155594769  dE = -5.6644878e-05  norm(t1,t2) = 0.00238641
+    CPU time for UCCSD iter      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:7]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:8]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:7]      0.00 sec, wall time      0.00 sec
+    CPU time for update t1 t2      0.00 sec, wall time      0.00 sec
+diis-c [-1.90270952e-07  1.00000000e+00]
+DIIS for step 1
+cycle = 2  E_corr(UCCSD) = -0.00122117787862704  dE = -3.06563227e-05  norm(t1,t2) = 0.000436201
+    CPU time for UCCSD iter      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:7]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:8]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:7]      0.00 sec, wall time      0.00 sec
+    CPU time for update t1 t2      0.00 sec, wall time      0.00 sec
+diis-c [-2.37743818e-09 -2.10873719e-01  1.21087372e+00]
+DIIS for step 2
+cycle = 3  E_corr(UCCSD) = -0.0012255918645828  dE = -4.41398596e-06  norm(t1,t2) = 8.98661e-05
+    CPU time for UCCSD iter      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:7]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:8]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:7]      0.00 sec, wall time      0.00 sec
+    CPU time for update t1 t2      0.00 sec, wall time      0.00 sec
+diis-c [-3.25552582e-11 -3.03854458e-02  1.10187860e-01  9.20197585e-01]
+DIIS for step 3
+cycle = 4  E_corr(UCCSD) = -0.00122611943054493  dE = -5.27565962e-07  norm(t1,t2) = 8.83214e-06
+    CPU time for UCCSD iter      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:7]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:8]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:7]      0.00 sec, wall time      0.00 sec
+    CPU time for update t1 t2      0.00 sec, wall time      0.00 sec
+diis-c [-4.79514886e-13  1.32139899e-02 -4.67854849e-02 -4.29459024e-01
+  1.46303052e+00]
+DIIS for step 4
+cycle = 5  E_corr(UCCSD) = -0.00122611711080851  dE = 2.31973642e-09  norm(t1,t2) = 1.92597e-06
+    CPU time for UCCSD iter      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:7]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:8]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:7]      0.00 sec, wall time      0.00 sec
+    CPU time for update t1 t2      0.00 sec, wall time      0.00 sec
+diis-c [-4.26720440e-15 -1.95111358e-03  7.17319007e-03  5.90940078e-02
+ -2.47654990e-01  1.18333891e+00]
+DIIS for step 5
+cycle = 6  E_corr(UCCSD) = -0.00122611901509979  dE = -1.90429128e-09  norm(t1,t2) = 1.45204e-07
+    CPU time for UCCSD iter      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:7]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:8]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [0:2]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [2:4]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [4:6]      0.00 sec, wall time      0.00 sec
+    CPU time for vvvv [6:7]      0.00 sec, wall time      0.00 sec
+    CPU time for update t1 t2      0.00 sec, wall time      0.00 sec
+Linear dependence found in DIIS error vectors.
+diis-c [-5.27355937e-16 -9.08909708e-04  3.33185526e-03  2.77488309e-02
+ -1.13683265e-01  4.83101337e-01  6.00410152e-01]
+DIIS for step 6
+cycle = 7  E_corr(UCCSD) = -0.00122611908280995  dE = -6.77101621e-11  norm(t1,t2) = 1.0893e-08
+    CPU time for UCCSD iter      0.00 sec, wall time      0.00 sec
+    CPU time for UCCSD      0.02 sec, wall time      0.01 sec
+UCCSD converged
+E(UCCSD) = -13.7796235147536  E_corr = -0.001226119082809949
+    CPU time for transpose 0:7      0.00 sec, wall time      0.00 sec
+    CPU time for transpose 0:8      0.00 sec, wall time      0.00 sec
+    CPU time for transpose 0:7      0.00 sec, wall time      0.00 sec
+    CPU time for transpose 0:8      0.00 sec, wall time      0.00 sec
+    CPU time for UCCSD(T) sort_eri      0.00 sec, wall time      0.00 sec
+max_memory 4000 MB (0 MB in use)
+    CPU time for contract 0:7,0:7      0.00 sec, wall time      0.00 sec
+    CPU time for contract_aaa      0.00 sec, wall time      0.00 sec
+max_memory 4000 MB (0 MB in use)
+    CPU time for contract 0:8,0:8      0.00 sec, wall time      0.00 sec
+    CPU time for contract_bbb      0.00 sec, wall time      0.00 sec
+    CPU time for contract 0:8,0:7      0.00 sec, wall time      0.00 sec
+    CPU time for contract_baa      0.00 sec, wall time      0.00 sec
+    CPU time for contract 0:7,0:8      0.00 sec, wall time      0.00 sec
+    CPU time for contract_abb      0.00 sec, wall time      0.00 sec
+    CPU time for UCCSD(T)      0.00 sec, wall time      0.00 sec
+UCCSD(T) correction = -2.31468504379044e-06
+irreps of each MO ['Ag' 'Ag' 'B1u' 'B2u' 'B3u' 'Ag' 'B1u' 'B2u' 'B3u']

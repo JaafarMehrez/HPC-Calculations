@@ -3,11 +3,7 @@ import numpy as np
 import pyscf
 from pyscf import cc, lib, tools, scf, symm, ao2mo
 from pyscf.tools import fcidump
-from pyscf.tools.fcidump import from_mo
-from pyscf.tools.fcidump import from_integrals
 from pyscf.gto.basis import parse_gaussian
-import pyscf.symm.param as param
-import pyscf.lib.logger as logger
 
 def write_head(fout, nmo, nelec, ms=0, orbsym=None):
     if not isinstance(nelec, (int, np.number)):
@@ -22,25 +18,24 @@ def write_head(fout, nmo, nelec, ms=0, orbsym=None):
     fout.write(' 150000\n')
 
 fcidump.write_head = write_head
-
+R_CO = 0.5
+Molecule_ZMAT = f'''
+C1
+O1 1 {R_CO}
+'''
 name = 'out'
-mol = pyscf.M(
-    atom = '''
-        LI
-    ''',
+mol = pyscf.M( 
+    atom = Molecule_ZMAT,
     unit = 'angstrom',
-    basis = {
-            'LI' : parse_gaussian.load('STO-2G.gbs', 'LI')
-    },
+    basis = {'C' : parse_gaussian.load('C-aVDZ-EMSL.gbs', 'C'), 
+             'O' : parse_gaussian.load('O-aVDZ-EMSL.gbs', 'O')},
     charge = 0,
-    spin = 1,
-    verbose = 9,
+    spin = 0,
     symmetry = True,
+    verbose = 9,
     output = name +'.txt',
-    symmetry_subgroup = 'D2h',
     max_memory = 4000,
 )
-
-mf = mol.ROHF().set(conv_tol=1e-10,max_cycle=999,ddm_tol=1e-14,direct_scf_tol=1e-14,chkfile=name+'.chk',init_guess='atom',irrep_nelec={'Ag': 3})
+mf = mol.RHF().set(conv_tol=1e-10,max_cycle=999,direct_scf_tol=1e-15, chkfile=name+'.chk', init_guess='atom')
 mf.kernel()
-pyscf.tools.fcidump.from_chkfile('fort.55',name+'.chk',tol=1e-18,float_format='% 0.20E',molpro_orbsym=False,orbsym=None)
+pyscf.tools.fcidump.from_chkfile('fort.55',name+'.chk',tol=1e-18, float_format='% 0.20E',molpro_orbsym=False,orbsym=None)

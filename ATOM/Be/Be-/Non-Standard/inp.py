@@ -1,3 +1,4 @@
+# Author: Jaafar Mehrez, jaafar@hpqc.org
 import os, sys, glob, subprocess, textwrap, numpy
 import pyscf
 from functools import reduce

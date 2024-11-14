@@ -1,3 +1,4 @@
+# Author: Jaafar Mehrez, jaafar@hpqc.org
 import numpy as np
 import pyscf
 from pyscf import cc, lib, tools, scf, symm, ao2mo

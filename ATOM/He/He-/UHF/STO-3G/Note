@@ -1,0 +1,14 @@
+If you run this calculation, you are supposed to have the follwoing error:
+
+Traceback (most recent call last):
+  File "~/inp.py", line 30, in <module>
+    mf.kernel()
+  File "<string>", line 2, in kernel
+  File "~/lib/python3.11/site-packages/pyscf/scf/hf.py", line 1802, in scf
+    self.build(self.mol)
+  File "~/lib/python3.11/site-packages/pyscf/scf/uhf_symm.py", line 329, in build
+    hf_symm.check_irrep_nelec(mol, self.irrep_nelec, self.nelec)
+  File "~/lib/python3.11/site-packages/pyscf/scf/hf_symm.py", line 254, in check_irrep_nelec
+    raise ValueError(msg)
+
+ValueError: More electrons than orbitals for irrep Ag nelec = 2 + 1, norb = 1

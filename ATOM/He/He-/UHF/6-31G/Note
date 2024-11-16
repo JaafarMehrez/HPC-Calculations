@@ -1,0 +1,11 @@
+You will get the following error if you try to calculate ccsd(t) energy
+
+et = mycc.ccsd_t()
+         ^^^^^^^^^^^^^
+  File "~/lib/python3.11/site-packages/pyscf/cc/uccsd.py", line 634, in ccsd_t
+    return uccsd_t.kernel(self, eris, t1, t2, self.verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "~/lib/python3.11/site-packages/pyscf/cc/uccsd_t.py", line 139, in kernel
+    for a0, a1 in lib.prange(0, nvirb, int(bufsize/nvira+1)):
+                                           ~~~~~~~^~~~~~
+ZeroDivisionError: division by zero

@@ -1,0 +1,195 @@
+#INFO: **** input file is /Users/jmhrzz/HPQC/ForkedRepo/PySCF-PySCF/ATOM/He/He/RHF/input.py ****
+import numpy as np
+import pyscf
+from pyscf import cc, lib, tools, scf, symm, ao2mo
+from pyscf.tools import fcidump
+from pyscf.tools.fcidump import from_mo
+from pyscf.tools.fcidump import from_integrals
+from pyscf.gto.basis import parse_gaussian
+import pyscf.symm.param as param
+import pyscf.lib.logger as logger
+
+
+def write_head(fout, nmo, nelec, ms=0, orbsym=None):
+    if not isinstance(nelec, (int, np.number)):
+        ms = abs(nelec[0] - nelec[1])
+        nelec = nelec[0] + nelec[1]
+    fout.write(f" {nmo:4d} {nelec:2d}\n")
+    if orbsym is not None and len(orbsym) > 0:
+        orbsym = [x + 1 for x in orbsym]
+        fout.write(f"{' '.join([str(x) for x in orbsym])}\n")
+    else:
+        fout.write(f"{' 1' * nmo}\n")
+    fout.write(' 150000\n')
+
+fcidump.write_head = write_head
+
+name = 'out'
+mol = pyscf.M( 
+    atom = '''
+        HE
+    ''',
+    unit = 'angstrom',
+    basis = {
+            'HE' : parse_gaussian.load('HE-STO-3G.gbs', 'HE')
+    },
+    charge = 0,
+    spin = 0,
+    verbose = 9,
+    symmetry = True,
+    output = name +'.txt',
+    symmetry_subgroup = 'D2h',
+    max_memory = 4000,
+)
+
+mf = mol.RHF().set(conv_check=False,conv_tol=1e-10,max_cycle=999,ddm_tol=1e-16,direct_scf_tol=1e-13,chkfile=name+'.chk',init_guess='atom',irrep_nelec={'Ag': 2})
+mf.kernel()
+pyscf.tools.fcidump.from_chkfile('fort.55',name+'.chk',tol=1e-18, float_format='% 0.20E',molpro_orbsym=False,orbsym=None)
+#INFO: ******************** input file end ********************
+
+
+System: uname_result(system='Darwin', node='Mhrzzs-MacBook-Air.local', release='24.1.0', version='Darwin Kernel Version 24.1.0: Thu Oct 10 21:02:45 PDT 2024; root:xnu-11215.41.3~2/RELEASE_ARM64_T8112', machine='arm64')  Threads 1
+Python 3.11.10 (main, Sep  7 2024, 01:03:31) [Clang 16.0.0 (clang-1600.0.26.3)]
+numpy 2.1.1  scipy 1.14.1  h5py 3.11.0
+Date: Sat Nov 16 10:19:27 2024
+PySCF version 2.6.2
+PySCF path  /Users/jmhrzz/HPQC/PySCF/pyscf-test/lib/python3.11/site-packages/pyscf
+
+[CONFIG] ARGPARSE = False
+[CONFIG] DEBUG = False
+[CONFIG] MAX_MEMORY = 4000
+[CONFIG] TMPDIR = /var/folders/sv/p893skhd53z1sh_0fgwlc_0w0000gn/T
+[CONFIG] UNIT = angstrom
+[CONFIG] VERBOSE = 3
+[CONFIG] conf_file = None
+[INPUT] verbose = 9
+[INPUT] max_memory = 4000 
+[INPUT] num. atoms = 1
+[INPUT] num. electrons = 2
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 0
+[INPUT] symmetry True subgroup D2h
+[INPUT] Mole.unit = angstrom
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 He     0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT] ---------------- BASIS SET ---------------- 
+[INPUT] l, kappa, [nprim/nctr], expnt,             c_1 c_2 ...
+[INPUT] He
+[INPUT] 0    0    [3    /1   ]  6.36242139        0.1543289
+                                1.158923          0.5353281
+                                0.31364979        0.4446345
+
+nuclear repulsion = 0
+point group symmetry = SO3, use subgroup D2h
+symmetry origin: [0. 0. 0.]
+symmetry axis x: [1. 0. 0.]
+symmetry axis y: [0. 1. 0.]
+symmetry axis z: [0. 0. 1.]
+num. orbitals of irrep Ag = 1
+number of shells = 1
+number of NR pGTOs = 3
+number of NR cGTOs = 1
+basis = {'HE': [[0, [6.36242139, 0.1543289], [1.158923, 0.5353281], [0.31364979, 0.4446345]]]}
+ecp = {}
+bas 0, expnt(s) = [6.36242139 1.158923   0.31364979]
+CPU time:         0.57
+arg.atm = [[ 2 20  1 23  0  0]]
+arg.bas = [[ 0  0  3  1  0 24 27  0]]
+arg.env = [0.         0.         0.         0.         0.         0.
+ 0.         0.         0.         0.         0.         0.
+ 0.         0.         0.         0.         0.         0.
+ 0.         0.         0.         0.         0.         0.
+ 6.36242139 1.158923   0.31364979 1.56199327 1.51069243 0.47081684]
+ecpbas  = []
+
+
+******** <class 'pyscf.scf.hf_symm.SymAdaptedRHF'> ********
+method = SymAdaptedRHF
+initial guess = atom
+damping factor = 0
+level_shift factor = 0
+DIIS = <class 'pyscf.scf.diis.CDIIS'>
+diis_start_cycle = 1
+diis_space = 8
+diis_damp = 0
+SCF conv_tol = 1e-10
+SCF conv_tol_grad = None
+SCF ddm_tol = 1e-16
+SCF max_cycles = 999
+direct_scf = True
+direct_scf_tol = 1e-13
+chkfile to save SCF result = out.chk
+max_memory 4000 MB (current use 0 MB)
+Freeze 2 electrons in irreps ['Ag']
+    0 free electrons in irreps 
+cond(S) = 1.0
+Set gradient conv threshold to 1e-05
+Initial guess from superposition of atomic densities.
+Spherically averaged atomic HF for {'He'}
+
+
+******** <class 'pyscf.scf.atom_hf.AtomSphAverageRHF'> ********
+method = AtomSphAverageRHF
+initial guess = minao
+damping factor = 0
+level_shift factor = 0
+DIIS = <class 'pyscf.scf.diis.CDIIS'>
+diis_start_cycle = 1
+diis_space = 8
+diis_damp = 0
+SCF conv_tol = 1e-09
+SCF conv_tol_grad = None
+SCF ddm_tol = 1e-10
+SCF max_cycles = 50
+direct_scf = True
+direct_scf_tol = 1e-13
+chkfile to save SCF result = /var/folders/sv/p893skhd53z1sh_0fgwlc_0w0000gn/T/tmpu2468apb
+max_memory 4000 MB (current use 0 MB)
+atom = He
+Set gradient conv threshold to 3.16228e-05
+Initial guess from minao.
+Nelec from initial guess = 1.9918919141540299
+E1 = -3.847834058036509  E_coul = 1.0471704351886362
+init E= -2.80066362284787
+l = 0  e_0 = -0.88031543
+    CPU time for initialize scf      0.01 sec, wall time      0.01 sec
+l = 0  e_0 = -0.88031543
+l = 0  occ = 1 + 0
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -3.863496840058926  E_coul = 1.0557128950502406
+cycle= 1 E= -2.80778394500869  delta_E= -0.00712  |g|=    0  |ddm|=    0
+    CPU time for cycle= 1      0.00 sec, wall time      0.00 sec
+diis-norm(errvec)=0
+diis-c [0. 1.]
+l = 0  e_0 = -0.876035525
+l = 0  occ = 1 + 0
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -3.863496840058926  E_coul = 1.0557128950502406
+cycle= 2 E= -2.80778394500869  delta_E=    0  |g|=    0  |ddm|=    0
+    CPU time for cycle= 2      0.00 sec, wall time      0.00 sec
+l = 0  e_0 = -0.876035525
+l = 0  occ = 1 + 0
+l = 1  occ = 0 + 0
+l = 2  occ = 0 + 0
+l = 3  occ = 0 + 0
+E1 = -3.863496840058926  E_coul = 1.0557128950502406
+Extra cycle  E= -2.80778394500869  delta_E=    0  |g|=    0  |ddm|=    0
+    CPU time for scf_cycle      0.01 sec, wall time      0.01 sec
+    CPU time for SCF      0.01 sec, wall time      0.01 sec
+Atomic HF for atom  He  converged. SCF energy = -2.80778394500869
+
+Atom He, E = -2.80778394501
+Nelec from initial guess = 2.0000000000000004
+E1 = -3.863496840058926  E_coul = 1.0557128950502406
+init E= -2.80778394500869
+    CPU time for initialize scf      0.01 sec, wall time      0.01 sec
+E1 = -3.863496840058926  E_coul = 1.0557128950502406
+cycle= 1 E= -2.80778394500869  delta_E=    0  |g|=    0  |ddm|=    0
+    CPU time for cycle= 1      0.00 sec, wall time      0.00 sec
+    CPU time for scf_cycle      0.01 sec, wall time      0.01 sec
+    CPU time for SCF      0.01 sec, wall time      0.02 sec
+converged SCF energy = -2.80778394500869
